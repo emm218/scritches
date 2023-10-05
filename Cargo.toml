@@ -6,3 +6,9 @@ license = "MIT"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0.75"
+clap = { version = "4.4.6", features = ["unicode", "derive"] }
+config = "0.13.3"
+serde = { version = "1.0.188", features = ["derive"] }
+serde_derive = "1.0.188"
+xdg = "2.5.2"
