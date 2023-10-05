@@ -1,7 +1,7 @@
 # Scritches
 
 I have some problems with existing solutions for scrobbling my music to last.fm
-with MPD so I'm trying to do a rewrite
+with MPD so I'm trying to roll my own
 
 ## Configuration
 
