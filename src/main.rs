@@ -4,7 +4,7 @@
 use anyhow::anyhow;
 use clap::Parser;
 use mpd_client::{
-    client::{ConnectionEvent, Subsystem},
+    client::{ConnectWithPasswordError, Connection, ConnectionEvent, Subsystem},
     commands,
     responses::Song,
     Client as MpdClient,
@@ -25,38 +25,69 @@ struct Args {
     #[arg(short, long)]
     config: Option<PathBuf>,
 
-    /// suppress output
+    /// Suppress output
     #[arg(short, long)]
     quiet: bool,
 
-    /// address for MPD
+    /// TCP socket address for MPD
     #[arg(short, long)]
     addr: Option<String>,
 
-    /// unix socket for MPD
+    /// Unix socket for MPD
     #[arg(short, long)]
-    socket: Option<PathBuf>,
+    socket: Option<String>,
+
+    /// MPD password
+    #[arg(short, long)]
+    password: Option<String>,
+}
+
+enum Connector {
+    Tcp(TcpStream),
+    Uds(UnixStream),
+}
+
+impl Connector {
+    pub async fn connect(
+        self,
+        password: Option<&str>,
+    ) -> Result<Connection, ConnectWithPasswordError> {
+        match self {
+            Self::Tcp(stream) => MpdClient::connect_with_password_opt(stream, password).await,
+            Self::Uds(stream) => MpdClient::connect_with_password_opt(stream, password).await,
+        }
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let settings = config::Settings::new(args.addr, args.config)?;
+    let settings = config::Settings::new(args.addr, args.socket, args.password, args.config)?;
 
-    let (client, mut state_changes) = match settings.mpd_socket {
-        None => MpdClient::connect(TcpStream::connect(settings.mpd_addr).await?).await?,
-        Some(sock) => match UnixStream::connect(&sock).await {
-            Ok(sock) => MpdClient::connect(sock).await?,
+    let conn: Connector = if let Some(sock) = settings.mpd_socket {
+        if !args.quiet {
+            println!("connecting to MPD at {}", sock.display());
+        }
+        match UnixStream::connect(&sock).await {
+            Ok(sock) => Connector::Uds(sock),
             Err(e) => {
-                eprintln!(
-                    "failed to connect to unix socket `{}`: {e}\ntrying TCP...",
-                    sock.display()
-                );
-                MpdClient::connect(TcpStream::connect(settings.mpd_addr).await?).await?
+                if !args.quiet {
+                    println!(
+                        "failed to connect to unix socket `{}`: {e}\ntrying TCP at {}...",
+                        sock.display(),
+                        settings.mpd_addr
+                    );
+                }
+                Connector::Tcp(TcpStream::connect(&settings.mpd_addr).await?)
             }
-        },
+        }
+    } else {
+        println!("connecting to MPD at {}", settings.mpd_addr);
+        Connector::Tcp(TcpStream::connect(&settings.mpd_addr).await?)
     };
+
+    let (client, mut state_changes) = conn.connect(settings.mpd_password.as_deref()).await?;
 
     if !args.quiet {
         println!("connected!");

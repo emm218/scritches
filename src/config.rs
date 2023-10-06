@@ -22,12 +22,22 @@ pub enum SettingsError {
 impl Settings {
     pub fn new(
         addr: Option<String>,
+        socket: Option<String>,
+        password: Option<String>,
         config: Option<PathBuf>,
     ) -> std::result::Result<Self, SettingsError> {
         let mut config_builder = Config::builder().set_default("mpd_addr", "localhost:6600")?;
 
         if let Some(addr) = addr {
             config_builder = config_builder.set_override("mpd_addr", addr)?;
+        }
+
+        if let Some(socket) = socket {
+            config_builder = config_builder.set_override("mpd_socket", socket)?;
+        }
+
+        if let Some(password) = password {
+            config_builder = config_builder.set_override("mpd_password", password)?;
         }
 
         if let Some(config_path) = config {
