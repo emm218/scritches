@@ -1,9 +1,15 @@
 #![feature(let_chains)]
 #![feature(duration_constants)]
 
+use anyhow::anyhow;
 use clap::Parser;
-use mpd::idle::{Idle, Subsystem};
-use mpd::song::Id as SongId;
+use mpd_client::{
+    client::{ConnectionEvent, Subsystem},
+    commands,
+    responses::Song,
+    Client as MpdClient,
+};
+use tokio::net::TcpStream;
 
 use std::cmp::min;
 use std::path::PathBuf;
@@ -31,65 +37,61 @@ struct Args {
     port: Option<u16>,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let settings = config::Settings::new(args.host, args.port, args.config)?;
 
-    let mut conn = mpd::Client::connect(&format!("{}:{}", settings.mpd_host, settings.mpd_port))?;
+    let conn = TcpStream::connect(&format!("{}:{}", settings.mpd_host, settings.mpd_port)).await?;
 
-    let stats = conn.stats()?;
-    let status = conn.status()?;
+    let (client, mut state_changes) = MpdClient::connect(conn).await?;
+
+    let stats = client.command(commands::Stats).await?;
+    let status = client.command(commands::Status).await?;
 
     let elapsed = status.elapsed.unwrap_or_default();
-    let length = status.duration.unwrap_or_default();
+    let mut length = status.duration.unwrap_or_default();
+    let mut start = stats.playtime - elapsed;
+    let mut song_in_queue = client.command(commands::CurrentSong).await?;
 
-    conn.wait(&[Subsystem::Player])?;
-
-    next_event(
-        stats.playtime - elapsed,
-        length,
-        elapsed,
-        status.song.map(|s| s.id),
-        &mut conn,
-    )
-}
-
-fn next_event(
-    prev_start: Duration,
-    prev_length: Duration,
-    prev_elapsed: Duration,
-    prev_song: Option<mpd::song::Id>,
-    conn: &mut mpd::Client,
-) -> anyhow::Result<()> {
-    let status = conn.status()?;
-    let cur_time = conn.stats()?.playtime;
-
-    let elapsed = status.elapsed.unwrap_or(prev_elapsed);
-
-    let (start, length, song) = match (prev_song, status.song.map(|s| s.id).zip(status.duration)) {
-        (Some(id), Some((id2, _))) if id == id2 => {
-            let t = if check_submit(prev_start, cur_time, prev_length)
-                && elapsed < Duration::from_secs(1)
-            {
-                submit_song(conn, id)?;
-                cur_time
-            } else {
-                prev_start
-            };
-            (t, prev_length, prev_song)
-        }
-
-        (old, new) => {
-            if check_submit(prev_start, cur_time, prev_length) && let Some(id) = old {
-                submit_song(conn, id)?;
+    'outer: loop {
+        loop {
+            match state_changes.next().await {
+                Some(ConnectionEvent::SubsystemChange(Subsystem::Player)) => break,
+                Some(ConnectionEvent::SubsystemChange(_)) => continue,
+                _ => break 'outer,
             }
-            (cur_time, new.map_or(prev_length, |s| s.1), new.map(|s| s.0))
         }
-    };
 
-    conn.wait(&[Subsystem::Player])?;
-    next_event(start, length, elapsed, song, conn)
+        let stats = client.command(commands::Stats).await?;
+        let status = client.command(commands::Status).await?;
+
+        let elapsed = status.elapsed.unwrap_or_default();
+        let cur_time = stats.playtime;
+
+        match (
+            &song_in_queue,
+            status.current_song.map(|s| s.1).zip(status.duration),
+        ) {
+            (Some(song), Some((id, _))) if song.id == id => {
+                if check_submit(start, cur_time, length) && elapsed < Duration::from_secs(1) {
+                    submit_song(&song.song);
+                    start = cur_time;
+                }
+            }
+
+            (old, new) => {
+                if check_submit(start, cur_time, length) && let Some(song) = old {
+                submit_song(&song.song);
+            }
+                start = cur_time;
+                length = new.map_or(length, |s| s.1);
+                song_in_queue = client.command(commands::CurrentSong).await?
+            }
+        }
+    }
+    Err(anyhow!("Connection closed by server"))
 }
 
 #[inline]
@@ -97,21 +99,10 @@ fn check_submit(start: Duration, cur: Duration, length: Duration) -> bool {
     (cur - start) >= min(Duration::from_secs(240), length / 2)
 }
 
-#[derive(Debug, thiserror::Error)]
-enum SongSubmitError {
-    #[error(transparent)]
-    MpdError(#[from] mpd::error::Error),
-
-    #[error("id {0} not found in playlist")]
-    IdError(SongId),
-}
-
-fn submit_song(conn: &mut mpd::Client, id: SongId) -> Result<(), SongSubmitError> {
-    let song = conn.playlistid(id)?.ok_or(SongSubmitError::IdError(id))?;
+fn submit_song(song: &Song) -> () {
     println!(
         "{} - {}",
-        song.artist.unwrap_or_default(),
-        song.title.unwrap_or_default()
+        song.artists().join(", "),
+        song.title().unwrap_or(""),
     );
-    Ok(())
 }
