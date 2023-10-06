@@ -20,3 +20,11 @@ Limitations on how MPD reports events make it non-trivial to tell when a song is
 repeated. The logic used here works fine in the normal case of listening to a
 song all the way through before restarting but breaks slightly in the case of
 restarting a song over and over. I don't know why you'd do that though.
+
+## Features Todo
+
+- get scrobbling from internet radio working (ID doesn't change on song change)
+    - probably not practical, lots of internet stations don't emit their
+        metadata properly so I can't even test
+- password protected MPD and MPD over unix socket
+- use MPD client to client to enable loving tracks
