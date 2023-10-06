@@ -1,4 +1,4 @@
-# Scritches
+# Scritches 🐱
 
 I have some problems with existing solutions for scrobbling my music to last.fm
 with MPD so I'm trying to roll my own
@@ -14,8 +14,9 @@ Current config values:
 - `mpd_addr` the TCP address to connect to MPD at (default `localhost:6600`)
 - `mpd_socket` the path to a unix socket to connect to MPD at (default none)
 - `mpd_password` the password to connect to MPD with (default none)
+
 any of these config values can also be set using environment variables or
-command line options. The priority from highest to lowest is
+command line options. From highest to lowest the priorities are:
 1. command line options
 2. environment variables
 3. config file
