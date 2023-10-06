@@ -3,10 +3,11 @@
 
 use clap::Parser;
 use mpd::idle::{Idle, Subsystem};
+use mpd::song::Id as SongId;
 
 use std::cmp::min;
-use std::time::Duration;
 use std::path::PathBuf;
+use std::time::Duration;
 
 mod config;
 
@@ -68,8 +69,10 @@ fn next_event(
 
     let (start, length, song) = match (prev_song, status.song.map(|s| s.id).zip(status.duration)) {
         (Some(id), Some((id2, _))) if id == id2 => {
-            let t = if check_submit(prev_start, cur_time, prev_length) && elapsed < Duration::from_secs(1) {
-                println!("{id}");
+            let t = if check_submit(prev_start, cur_time, prev_length)
+                && elapsed < Duration::from_secs(1)
+            {
+                submit_song(conn, id)?;
                 cur_time
             } else {
                 prev_start
@@ -78,8 +81,8 @@ fn next_event(
         }
 
         (old, new) => {
-            if check_submit(prev_start, cur_time, prev_length) && let Some(id) = old { 
-                println!("{id}");
+            if check_submit(prev_start, cur_time, prev_length) && let Some(id) = old {
+                submit_song(conn, id)?;
             }
             (cur_time, new.map_or(prev_length, |s| s.1), new.map(|s| s.0))
         }
@@ -91,5 +94,24 @@ fn next_event(
 
 #[inline]
 fn check_submit(start: Duration, cur: Duration, length: Duration) -> bool {
-    (cur - start) >= min(Duration::from_secs(240), length / 2) 
+    (cur - start) >= min(Duration::from_secs(240), length / 2)
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SongSubmitError {
+    #[error(transparent)]
+    MpdError(#[from] mpd::error::Error),
+
+    #[error("id {0} not found in playlist")]
+    IdError(SongId),
+}
+
+fn submit_song(conn: &mut mpd::Client, id: SongId) -> Result<(), SongSubmitError> {
+    let song = conn.playlistid(id)?.ok_or(SongSubmitError::IdError(id))?;
+    println!(
+        "{} - {}",
+        song.artist.unwrap_or_default(),
+        song.title.unwrap_or_default()
+    );
+    Ok(())
 }
