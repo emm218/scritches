@@ -8,11 +8,17 @@ with MPD so I'm trying to roll my own
 The config file is stored in `$XDG_CONFIG_HOME/scritches` by default and can use
 any of the file formats supported by the
 [config](https://crates.io/crates/config) crate (YAML, TOML, etc.) as long as
-the part before the extension is `config`. Currently the only options are
-`mpd_hostname` and `mpd_port`. These can also be read from the `MPD_HOST` and
-`MPD_PORT` environment variables which will override the settings in the config
-file. Command line option have the highest priority, overriding both environment
-variables and config files.
+the part before the extension is `config`.
+
+Current config values:
+- `mpd_addr` the TCP address to connect to MPD at (default `localhost:6600`)
+- `mpd_socket` the path to a unix socket to connect to MPD at (default none)
+- `mpd_password` the password to connect to MPD with (default none)
+any of these config values can also be set using environment variables or
+command line options. The priority from highest to lowest is
+1. command line options
+2. environment variables
+3. config file
 
 ## Notes
 
@@ -23,8 +29,4 @@ restarting a song over and over. I don't know why you'd do that though.
 
 ## Features Todo
 
-- get scrobbling from internet radio working (ID doesn't change on song change)
-    - probably not practical, lots of internet stations don't emit their
-        metadata properly so I can't even test
-- password protected MPD and MPD over unix socket
-- use MPD client to client to enable loving tracks
+- use MPD client to client messages to enable loving tracks
