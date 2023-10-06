@@ -12,10 +12,10 @@ pub struct Settings {
 
 #[derive(Debug, Error)]
 pub enum SettingsError {
-    #[error("{0}")]
+    #[error(transparent)]
     ConfigError(#[from] config::ConfigError),
 
-    #[error("{0}")]
+    #[error(transparent)]
     XDGError(#[from] xdg::BaseDirectoriesError),
 }
 
