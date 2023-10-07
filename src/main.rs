@@ -165,18 +165,13 @@ enum SongError {
 
 fn song_info(song: &Song) -> Result<SongInfo, SongError> {
     let title = song.title().ok_or(SongError::NoTitle)?.to_string();
-    let artist = if song.artists().is_empty() {
-        Err(SongError::NoArtist)
-    } else {
-        Ok(song.artists().join(", "))
-    }?;
+    let artist = (!song.artists().is_empty())
+        .then(|| song.artists().join(", "))
+        .ok_or(SongError::NoArtist)?;
     let album = song.album().map(|a| a.to_string());
-    let album_artist = if song.album_artists().is_empty() {
-        None
-    } else {
-        Some(song.album_artists().join(", "))
-    }
-    .filter(|a| a.ne(&artist));
+    let album_artist = (!song.album_artists().is_empty())
+        .then(|| song.artists().join(", "))
+        .filter(|a| a.ne(&artist));
     let track_id = song
         .tags
         .get(&Tag::MusicBrainzTrackId)
