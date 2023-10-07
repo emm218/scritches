@@ -31,10 +31,6 @@ struct Args {
     #[arg(short, long)]
     config: Option<PathBuf>,
 
-    /// Suppress output
-    #[arg(short, long)]
-    quiet: bool,
-
     /// TCP socket address for MPD
     #[arg(short, long)]
     addr: Option<String>,
@@ -72,19 +68,15 @@ async fn main() -> anyhow::Result<()> {
     let settings = config::Settings::new(args.addr, args.socket, args.password, args.config)?;
 
     let conn: Connector = if let Some(sock) = settings.mpd_socket {
-        if !args.quiet {
-            println!("connecting to MPD at {}", sock.display());
-        }
+        println!("connecting to MPD at {}", sock.display());
         match UnixStream::connect(&sock).await {
             Ok(sock) => Connector::Uds(sock),
             Err(e) => {
-                if !args.quiet {
-                    println!(
-                        "failed to connect to unix socket `{}`: {e}\ntrying TCP at {}...",
-                        sock.display(),
-                        settings.mpd_addr
-                    );
-                }
+                println!(
+                    "failed to connect to unix socket `{}`: {e}\ntrying TCP at {}...",
+                    sock.display(),
+                    settings.mpd_addr
+                );
                 Connector::Tcp(TcpStream::connect(&settings.mpd_addr).await?)
             }
         }
@@ -95,9 +87,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (client, mut state_changes) = conn.connect(settings.mpd_password.as_deref()).await?;
 
-    if !args.quiet {
-        println!("connected!");
-    }
+    println!("connected!");
 
     let (tx, mut rx) = mpsc::channel(5);
 
