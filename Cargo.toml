@@ -14,5 +14,5 @@ mpd_client = "1.2.0"
 serde = { version = "1.0.188", features = ["derive"] }
 serde_derive = "1.0.188"
 thiserror = "1.0.49"
-tokio = "1.32.0"
+tokio = { version = "1.32.0", features = ["sync"] }
 xdg = "2.5.2"

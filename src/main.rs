@@ -7,9 +7,13 @@ use mpd_client::{
     client::{ConnectWithPasswordError, Connection, ConnectionEvent, Subsystem},
     commands,
     responses::Song,
+    tag::Tag,
     Client as MpdClient,
 };
-use tokio::net::{TcpStream, UnixStream};
+use tokio::{
+    net::{TcpStream, UnixStream},
+    sync::mpsc,
+};
 
 use std::cmp::min;
 use std::path::PathBuf;
@@ -17,6 +21,8 @@ use std::time::Duration;
 
 mod config;
 mod last_fm;
+
+use last_fm::SongInfo;
 
 #[derive(Debug, Parser)]
 #[command(version)]
@@ -93,6 +99,14 @@ async fn main() -> anyhow::Result<()> {
         println!("connected!");
     }
 
+    let (tx, mut rx) = mpsc::channel(5);
+
+    tokio::spawn(async move {
+        while let Some(info) = rx.recv().await {
+            println!("{info:?}");
+        }
+    });
+
     let stats = client.command(commands::Stats).await?;
     let status = client.command(commands::Status).await?;
 
@@ -122,8 +136,9 @@ async fn main() -> anyhow::Result<()> {
         ) {
             (Some(song), Some((id, _))) if song.id == id => {
                 if check_scrobble(start, cur_time, length) && elapsed < Duration::from_secs(1) {
-                    if let Err(e) = submit_song(&song.song) {
-                        eprintln!("can't scrobble song: {e}")
+                    match song_info(&song.song) {
+                        Err(e) => eprintln!("can't scrobble song: {e}"),
+                        Ok(info) => tx.send(info).await?,
                     }
                     start = cur_time;
                 }
@@ -131,8 +146,9 @@ async fn main() -> anyhow::Result<()> {
 
             (old, new) => {
                 if check_scrobble(start, cur_time, length) && let Some(song) = old {
-                    if let Err(e) = submit_song(&song.song) {
-                        eprintln!("can't scrobble song: {e}")
+                    match song_info(&song.song) {
+                        Err(e) => eprintln!("can't scrobble song: {e}"),
+                        Ok(info) => tx.send(info).await?,
                     }
                 }
                 start = cur_time;
@@ -157,13 +173,31 @@ enum SongError {
     NoArtist,
 }
 
-fn submit_song(song: &Song) -> Result<(), SongError> {
-    let title = song.title().ok_or(SongError::NoTitle)?;
+fn song_info(song: &Song) -> Result<SongInfo, SongError> {
+    let title = song.title().ok_or(SongError::NoTitle)?.to_string();
     let artist = if song.artists().is_empty() {
         Err(SongError::NoArtist)
     } else {
         Ok(song.artists().join(", "))
     }?;
-    println!("{} - {}", artist, title);
-    Ok(())
+    let album = song.album().map(|a| a.to_string());
+    let album_artist = if song.album_artists().is_empty() {
+        None
+    } else {
+        Some(song.album_artists().join(", "))
+    }
+    .filter(|a| a.ne(&artist));
+    let track_id = song
+        .tags
+        .get(&Tag::MusicBrainzTrackId)
+        .map(|t| t.first())
+        .flatten()
+        .cloned();
+    Ok(SongInfo {
+        title,
+        artist,
+        album_artist,
+        album,
+        track_id,
+    })
 }
