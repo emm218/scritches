@@ -24,6 +24,14 @@ mod last_fm;
 
 use last_fm::SongInfo;
 
+#[derive(Debug, thiserror::Error)]
+enum SongError {
+    #[error("title is missing")]
+    NoTitle,
+    #[error("artist is missing")]
+    NoArtist,
+}
+
 #[derive(Debug, Parser)]
 #[command(version)]
 struct Args {
@@ -153,14 +161,6 @@ async fn main() -> anyhow::Result<()> {
 #[inline]
 fn check_scrobble(start: Duration, cur: Duration, length: Duration) -> bool {
     (cur - start) >= min(Duration::from_secs(240), length / 2)
-}
-
-#[derive(Debug, thiserror::Error)]
-enum SongError {
-    #[error("title is missing")]
-    NoTitle,
-    #[error("artist is missing")]
-    NoArtist,
 }
 
 fn song_info(song: &Song) -> Result<SongInfo, SongError> {
