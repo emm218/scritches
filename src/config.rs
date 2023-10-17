@@ -1,10 +1,7 @@
 use config::Config;
 use serde_derive::Deserialize;
 
-use std::{
-    path::PathBuf,
-    result::{self, Result},
-};
+use std::{path::PathBuf, result::Result};
 
 #[derive(Debug, Deserialize)]
 pub struct Settings {
