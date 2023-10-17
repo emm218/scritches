@@ -237,7 +237,7 @@ async fn handle_player(
                 }
             let new_song = client.command(CurrentSong).await?;
             if let Some(Ok(info)) = new_song.as_ref().map(|s| basic_info(&s.song)) {
-                tx.send(Message::now_playing(info)).await?;
+                tx.send(Message::NowPlaying(info)).await?;
             }
             Ok((
                 new.map_or(length, |s| s.1),
