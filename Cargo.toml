@@ -12,6 +12,7 @@ clap = { version = "4.4.6", features = ["unicode", "derive"] }
 config = "0.13.3"
 crossbeam-channel = "0.5.8"
 mpd_client = "1.2.0"
+rand = "0.8.5"
 reqwest = "0.11.22"
 rmp-serde = "1.1.2"
 serde = { version = "1.0.188", features = ["derive"] }
