@@ -15,11 +15,8 @@ Current config values:
 - `mpd_socket` the path to a unix socket to connect to MPD at (default none)
 - `mpd_password` the password to connect to MPD with (default none)
 
-any of these config values can also be set using environment variables or
-command line options. From highest to lowest the priorities are:
-1. command line options
-2. environment variables
-3. config file
+any of these config values can also be set using command line options, which
+will override the value read from the config file.
 
 ## Notes
 

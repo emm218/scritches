@@ -79,7 +79,6 @@ impl Settings {
             );
         }
 
-        config_builder = config_builder.add_source(config::Environment::default());
         if let Some(queue_path) = queue {
             config_builder = config_builder.set_override("queue_path", queue_path.to_str())?;
         }
