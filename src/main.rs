@@ -147,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
+            println!("{msg:?}");
             match msg {
                 Message::Scrobble(info) => work_queue.scrobble_queue.push(info),
                 Message::Action(action) => work_queue.action_queue.push_back(action),
@@ -182,7 +183,9 @@ async fn main() -> anyhow::Result<()> {
                 .await?
             }
             Some(ConnectionEvent::SubsystemChange(Subsystem::Message)) => {
-                handle_message(&client, &tx, current_song.as_ref()).await?
+                if let Some(song) = current_song.as_ref() {
+                    handle_message(&client, &tx, song).await?
+                }
             }
             Some(ConnectionEvent::SubsystemChange(_)) => continue,
             _ => break,
@@ -242,12 +245,22 @@ async fn handle_player(
 
 async fn handle_message(
     client: &MpdClient,
-    _tx: &mpsc::Sender<Message>,
-    _current_song: Option<&SongInQueue>,
+    tx: &mpsc::Sender<Message>,
+    current_song: &SongInQueue,
 ) -> anyhow::Result<()> {
+    let info = basic_info(&current_song.song)?;
+
     let messages = client.command(ReadChannelMessages).await?;
     for m in messages {
-        println!("{m:?}");
+        if m.1 == "love" {
+            // clone here is evil because we have 2 strings :( but we can't use Arc instead because
+            // it doesn't play nice with serde...oh no
+            tx.send(Message::Action(Action::LoveTrack(info.clone())))
+                .await?;
+        } else if m.1 == "unlove" {
+            tx.send(Message::Action(Action::UnloveTrack(info.clone())))
+                .await?;
+        }
     }
     Ok(())
 }

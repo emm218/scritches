@@ -12,7 +12,7 @@ pub struct ScrobbleInfo {
     pub start_time: SystemTime,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BasicInfo {
     pub title: String,
     pub artist: String,
