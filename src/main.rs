@@ -10,19 +10,43 @@ use mpd_client::{
     tag::Tag,
     Client as MpdClient,
 };
+use serde_derive::{Deserialize, Serialize};
 use tokio::{
     net::{TcpStream, UnixStream},
     sync::mpsc,
 };
 
-use std::cmp::min;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{
+    cmp::min, collections::VecDeque, fs::File, io::Seek, path::PathBuf, time::Duration,
+    time::SystemTime,
+};
 
 mod config;
 mod last_fm;
 
-use last_fm::SongInfo;
+use last_fm::{Action, BasicInfo, Message, ScrobbleInfo};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WorkQueue {
+    pub scrobble_queue: Vec<ScrobbleInfo>,
+    pub action_queue: VecDeque<Action>,
+}
+
+impl WorkQueue {
+    fn new() -> Self {
+        Self {
+            scrobble_queue: Vec::new(),
+            action_queue: VecDeque::new(),
+        }
+    }
+
+    pub fn write_queue(&self, queue_file: &mut File) -> bincode::Result<()> {
+        queue_file.set_len(0)?;
+        queue_file.rewind()?;
+        println!("{self:?}");
+        bincode::serialize_into(queue_file, self)
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 enum SongError {
@@ -50,6 +74,10 @@ struct Args {
     /// MPD password
     #[arg(short, long)]
     password: Option<String>,
+
+    /// Queue file for offline use
+    #[arg(short, long)]
+    queue: Option<PathBuf>,
 }
 
 enum Connector {
@@ -73,7 +101,13 @@ impl Connector {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let settings = config::Settings::new(args.addr, args.socket, args.password, args.config)?;
+    let settings = config::Settings::new(
+        args.addr,
+        args.socket,
+        args.password,
+        args.config,
+        args.queue,
+    )?;
 
     let conn: Connector = if let Some(sock) = settings.mpd_socket {
         println!("connecting to MPD at {}", sock.display());
@@ -99,9 +133,20 @@ async fn main() -> anyhow::Result<()> {
 
     let (tx, mut rx) = mpsc::channel(5);
 
+    let mut work_queue = match File::open(&settings.queue_path) {
+        Ok(f) => bincode::deserialize_from(f)?,
+        Err(_) => WorkQueue::new(),
+    };
+    let mut queue_file = File::create(&settings.queue_path)?;
+
     tokio::spawn(async move {
-        while let Some(info) = rx.recv().await {
-            println!("{info:?}");
+        while let Some(msg) = rx.recv().await {
+            match msg {
+                Message::Scrobble(info) => work_queue.scrobble_queue.push(info),
+                Message::Action(action) => work_queue.action_queue.push_back(action),
+                _ => todo!(),
+            }
+            work_queue.write_queue(&mut queue_file).expect("aaaaa");
         }
     });
 
@@ -110,8 +155,10 @@ async fn main() -> anyhow::Result<()> {
 
     let elapsed = status.elapsed.unwrap_or_default();
     let mut length = status.duration.unwrap_or_default();
-    let mut start = stats.playtime - elapsed;
+    let mut start_playtime = stats.playtime - elapsed;
     let mut song_in_queue = client.command(commands::CurrentSong).await?;
+
+    let mut start_time = SystemTime::now();
 
     'outer: loop {
         loop {
@@ -126,32 +173,36 @@ async fn main() -> anyhow::Result<()> {
         let status = client.command(commands::Status).await?;
 
         let elapsed = status.elapsed.unwrap_or_default();
-        let cur_time = stats.playtime;
+        let cur_playtime = stats.playtime;
 
         match (
             &song_in_queue,
             status.current_song.map(|s| s.1).zip(status.duration),
         ) {
             (Some(song), Some((id, _))) if song.id == id => {
-                if check_scrobble(start, cur_time, length) && elapsed < Duration::from_secs(1) {
-                    match song_info(&song.song) {
+                if check_scrobble(start_playtime, cur_playtime, length)
+                    && elapsed < Duration::from_secs(1)
+                {
+                    match scrobble_info(&song.song, start_time) {
                         Err(e) => eprintln!("can't scrobble song: {e}"),
-                        Ok(info) => tx.send(info).await?,
+                        Ok(info) => tx.send(Message::Scrobble(info)).await?,
                     }
-                    start = cur_time;
+                    start_playtime = cur_playtime;
+                    start_time = SystemTime::now();
                 }
             }
 
             (old, new) => {
-                if check_scrobble(start, cur_time, length) && let Some(song) = old {
-                    match song_info(&song.song) {
+                if check_scrobble(start_playtime, cur_playtime, length) && let Some(song) = old {
+                    match scrobble_info(&song.song, start_time) {
                         Err(e) => eprintln!("can't scrobble song: {e}"),
-                        Ok(info) => tx.send(info).await?,
+                        Ok(info) => tx.send(Message::Scrobble(info)).await?,
                     }
                 }
-                start = cur_time;
+                start_playtime = cur_playtime;
                 length = new.map_or(length, |s| s.1);
-                song_in_queue = client.command(commands::CurrentSong).await?
+                song_in_queue = client.command(commands::CurrentSong).await?;
+                start_time = SystemTime::now();
             }
         }
     }
@@ -163,26 +214,35 @@ fn check_scrobble(start: Duration, cur: Duration, length: Duration) -> bool {
     (cur - start) >= min(Duration::from_secs(240), length / 2)
 }
 
-fn song_info(song: &Song) -> Result<SongInfo, SongError> {
+fn scrobble_info(song: &Song, start_time: SystemTime) -> Result<ScrobbleInfo, SongError> {
     let title = song.title().ok_or(SongError::NoTitle)?.to_string();
     let artist = (!song.artists().is_empty())
         .then(|| song.artists().join(", "))
         .ok_or(SongError::NoArtist)?;
     let album = song.album().map(|a| a.to_string());
     let album_artist = (!song.album_artists().is_empty())
-        .then(|| song.artists().join(", "))
+        .then(|| song.album_artists().join(", "))
         .filter(|a| a.ne(&artist));
     let track_id = song
         .tags
-        .get(&Tag::MusicBrainzTrackId)
+        .get(&Tag::MusicBrainzRecordingId)
         .map(|t| t.first())
         .flatten()
         .cloned();
-    Ok(SongInfo {
+    Ok(ScrobbleInfo {
         title,
         artist,
         album_artist,
         album,
         track_id,
+        start_time,
     })
+}
+
+fn basic_info(song: &Song) -> Result<BasicInfo, SongError> {
+    let title = song.title().ok_or(SongError::NoTitle)?.to_string();
+    let artist = (!song.artists().is_empty())
+        .then(|| song.artists().join(", "))
+        .ok_or(SongError::NoArtist)?;
+    Ok(BasicInfo { title, artist })
 }

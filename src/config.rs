@@ -1,22 +1,35 @@
 use config::Config;
 use serde_derive::Deserialize;
 
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    result::{self, Result},
+};
 
 #[derive(Debug, Deserialize)]
 pub struct Settings {
     pub mpd_addr: String,
     pub mpd_socket: Option<PathBuf>,
     pub mpd_password: Option<String>,
+    pub queue_path: PathBuf,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
-    #[error(transparent)]
+    #[error("config error: {0}")]
     ConfigError(#[from] config::ConfigError),
 
     #[error(transparent)]
     XDGError(#[from] xdg::BaseDirectoriesError),
+
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
+
+    #[error("Invalid UTF-8 in config path")]
+    ConfigPathError,
+
+    #[error("Invalid UTF-8 in queue file path")]
+    QueuePathError,
 }
 
 impl Settings {
@@ -25,8 +38,18 @@ impl Settings {
         socket: Option<String>,
         password: Option<String>,
         config: Option<PathBuf>,
-    ) -> std::result::Result<Self, SettingsError> {
-        let mut config_builder = Config::builder().set_default("mpd_addr", "localhost:6600")?;
+        queue: Option<PathBuf>,
+    ) -> Result<Self, SettingsError> {
+        let xdg_dirs = xdg::BaseDirectories::with_prefix("scritches")?;
+        let mut config_builder = Config::builder()
+            .set_default("mpd_addr", "localhost:6600")?
+            .set_default(
+                "queue_path",
+                xdg_dirs
+                    .place_state_file("queue")?
+                    .to_str()
+                    .ok_or(SettingsError::QueuePathError)?,
+            )?;
 
         if let Some(addr) = addr {
             config_builder = config_builder.set_override("mpd_addr", addr)?;
@@ -42,7 +65,7 @@ impl Settings {
 
         if let Some(config_path) = config {
             config_builder = config_builder.add_source(config::File::with_name(
-                config_path.to_str().expect("invalid UTF-8 in config path"),
+                config_path.to_str().ok_or(SettingsError::ConfigPathError)?,
             ));
         } else {
             config_builder = config_builder.add_source(
@@ -50,13 +73,16 @@ impl Settings {
                     xdg::BaseDirectories::with_prefix("scritches")?
                         .get_config_file("config")
                         .to_str()
-                        .expect("invalid UTF-8 in config path"),
+                        .ok_or(SettingsError::ConfigPathError)?,
                 )
                 .required(false),
             );
         }
 
         config_builder = config_builder.add_source(config::Environment::default());
+        if let Some(queue_path) = queue {
+            config_builder = config_builder.set_override("queue_path", queue_path.to_str())?;
+        }
 
         Ok(config_builder.build()?.try_deserialize()?)
     }
