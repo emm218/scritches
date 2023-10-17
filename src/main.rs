@@ -142,8 +142,9 @@ async fn main() -> anyhow::Result<()> {
         },
         Err(_) => WorkQueue::new(),
     };
+
     let mut queue_file = File::create(&settings.queue_path)?;
-    work_queue.write_queue(&mut queue_file).expect("aaaaa");
+    work_queue.write_queue(&mut queue_file)?;
 
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -151,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
             match msg {
                 Message::Scrobble(info) => work_queue.scrobble_queue.push(info),
                 Message::Action(action) => work_queue.action_queue.push_back(action),
-                _ => todo!(),
+                Message::NowPlaying(_) => {}
             }
             work_queue.write_queue(&mut queue_file).expect("aaaaa");
         }
@@ -233,11 +234,15 @@ async fn handle_player(
                         Ok(info) => tx.send(Message::Scrobble(info)).await?,
                     }
                 }
+            let new_song = client.command(CurrentSong).await?;
+            if let Some(Ok(info)) = new_song.as_ref().map(|s| basic_info(&s.song)) {
+                tx.send(Message::NowPlaying(info)).await?;
+            }
             Ok((
                 new.map_or(length, |s| s.1),
                 cur_playtime,
                 SystemTime::now(),
-                client.command(CurrentSong).await?,
+                new_song,
             ))
         }
     }
