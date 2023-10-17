@@ -27,6 +27,22 @@ pub enum Message {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Action {
-    LoveTrack(BasicInfo),
-    UnloveTrack(BasicInfo),
+    LoveTrack { title: String, artist: String },
+    UnloveTrack { title: String, artist: String },
+}
+
+impl Message {
+    pub fn love_track(info: BasicInfo) -> Self {
+        Message::Action(Action::LoveTrack {
+            title: info.title,
+            artist: info.artist,
+        })
+    }
+
+    pub fn unlove_track(info: BasicInfo) -> Self {
+        Message::Action(Action::UnloveTrack {
+            title: info.title,
+            artist: info.artist,
+        })
+    }
 }
