@@ -28,14 +28,14 @@ use last_fm::{Action, BasicInfo, Message, ScrobbleInfo};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkQueue {
-    pub scrobble_queue: Vec<ScrobbleInfo>,
+    pub scrobble_queue: VecDeque<ScrobbleInfo>,
     pub action_queue: VecDeque<Action>,
 }
 
 impl WorkQueue {
     fn new() -> Self {
         Self {
-            scrobble_queue: Vec::new(),
+            scrobble_queue: VecDeque::new(),
             action_queue: VecDeque::new(),
         }
     }
@@ -150,7 +150,7 @@ async fn main() -> anyhow::Result<()> {
         while let Some(msg) = rx.recv().await {
             println!("{msg:?}");
             match msg {
-                Message::Scrobble(info) => work_queue.scrobble_queue.push(info),
+                Message::Scrobble(info) => work_queue.scrobble_queue.push_back(info),
                 Message::Action(action) => work_queue.action_queue.push_back(action),
                 Message::NowPlaying { .. } => {}
             }
