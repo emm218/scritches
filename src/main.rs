@@ -17,8 +17,8 @@ use tokio::{
 };
 
 use std::{
-    cmp::min, collections::VecDeque, fs::File, io::Seek, path::PathBuf, time::Duration,
-    time::SystemTime,
+    cmp::min, collections::VecDeque, fs::File, io::Seek, path::PathBuf, string::ToString,
+    time::Duration, time::SystemTime,
 };
 
 mod config;
@@ -279,7 +279,7 @@ fn scrobble_info(song: &Song, start_time: SystemTime) -> Result<ScrobbleInfo, So
     let artist = (!song.artists().is_empty())
         .then(|| song.artists().join(", "))
         .ok_or(SongError::NoArtist)?;
-    let album = song.album().map(|a| a.to_string());
+    let album = song.album().map(ToString::to_string);
     let album_artist = (!song.album_artists().is_empty())
         .then(|| song.album_artists().join(", "))
         .filter(|a| a.ne(&artist));
@@ -291,8 +291,8 @@ fn scrobble_info(song: &Song, start_time: SystemTime) -> Result<ScrobbleInfo, So
     Ok(ScrobbleInfo {
         title,
         artist,
-        album_artist,
         album,
+        album_artist,
         track_id,
         start_time,
     })
