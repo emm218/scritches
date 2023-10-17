@@ -133,10 +133,17 @@ async fn main() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel(5);
 
     let mut work_queue = match File::open(&settings.queue_path) {
-        Ok(f) => bincode::deserialize_from(f)?,
+        Ok(f) => match bincode::deserialize_from(f) {
+            Ok(wq) => wq,
+            Err(e) => {
+                eprintln!("unable to load queue file: {e}");
+                WorkQueue::new()
+            }
+        },
         Err(_) => WorkQueue::new(),
     };
     let mut queue_file = File::create(&settings.queue_path)?;
+    work_queue.write_queue(&mut queue_file).expect("aaaaa");
 
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
