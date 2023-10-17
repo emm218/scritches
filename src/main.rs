@@ -144,6 +144,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mut queue_file = File::create(&settings.queue_path)?;
+    // write queue out immediately to avoid empty queue file
     work_queue.write_queue(&mut queue_file)?;
 
     tokio::spawn(async move {
@@ -285,8 +286,7 @@ fn scrobble_info(song: &Song, start_time: SystemTime) -> Result<ScrobbleInfo, So
     let track_id = song
         .tags
         .get(&Tag::MusicBrainzRecordingId)
-        .map(|t| t.first())
-        .flatten()
+        .and_then(|t| t.first())
         .cloned();
     Ok(ScrobbleInfo {
         title,

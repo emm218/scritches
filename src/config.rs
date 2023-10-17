@@ -14,19 +14,19 @@ pub struct Settings {
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
     #[error("config error: {0}")]
-    ConfigError(#[from] config::ConfigError),
+    Config(#[from] config::ConfigError),
 
     #[error(transparent)]
-    XDGError(#[from] xdg::BaseDirectoriesError),
+    Xdg(#[from] xdg::BaseDirectoriesError),
 
     #[error(transparent)]
-    IoError(#[from] std::io::Error),
+    Io(#[from] std::io::Error),
 
     #[error("Invalid UTF-8 in config path")]
-    ConfigPathError,
+    ConfigPath,
 
     #[error("Invalid UTF-8 in queue file path")]
-    QueuePathError,
+    QueuePath,
 }
 
 impl Settings {
@@ -45,7 +45,7 @@ impl Settings {
                 xdg_dirs
                     .place_state_file("queue")?
                     .to_str()
-                    .ok_or(SettingsError::QueuePathError)?,
+                    .ok_or(SettingsError::QueuePath)?,
             )?;
 
         if let Some(addr) = addr {
@@ -62,7 +62,7 @@ impl Settings {
 
         if let Some(config_path) = config {
             config_builder = config_builder.add_source(config::File::with_name(
-                config_path.to_str().ok_or(SettingsError::ConfigPathError)?,
+                config_path.to_str().ok_or(SettingsError::ConfigPath)?,
             ));
         } else {
             config_builder = config_builder.add_source(
@@ -70,14 +70,17 @@ impl Settings {
                     xdg::BaseDirectories::with_prefix("scritches")?
                         .get_config_file("config")
                         .to_str()
-                        .ok_or(SettingsError::ConfigPathError)?,
+                        .ok_or(SettingsError::ConfigPath)?,
                 )
                 .required(false),
             );
         }
 
         if let Some(queue_path) = queue {
-            config_builder = config_builder.set_override("queue_path", queue_path.to_str())?;
+            config_builder = config_builder.set_override(
+                "queue_path",
+                queue_path.to_str().ok_or(SettingsError::QueuePath)?,
+            )?;
         }
 
         Ok(config_builder.build()?.try_deserialize()?)
