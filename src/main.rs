@@ -5,8 +5,8 @@ use anyhow::anyhow;
 use clap::Parser;
 use mpd_client::{
     client::{ConnectWithPasswordError, Connection, ConnectionEvent, Subsystem},
-    commands,
-    responses::Song,
+    commands::{CurrentSong, ReadChannelMessages, Stats, Status, SubscribeToChannel},
+    responses::{Song, SongInQueue},
     tag::Tag,
     Client as MpdClient,
 };
@@ -43,7 +43,6 @@ impl WorkQueue {
     pub fn write_queue(&self, queue_file: &mut File) -> bincode::Result<()> {
         queue_file.set_len(0)?;
         queue_file.rewind()?;
-        println!("{self:?}");
         bincode::serialize_into(queue_file, self)
     }
 }
@@ -150,63 +149,100 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let stats = client.command(commands::Stats).await?;
-    let status = client.command(commands::Status).await?;
+    client.command(SubscribeToChannel("scritches")).await?;
+
+    let stats = client.command(Stats).await?;
+    let status = client.command(Status).await?;
 
     let elapsed = status.elapsed.unwrap_or_default();
     let mut length = status.duration.unwrap_or_default();
     let mut start_playtime = stats.playtime - elapsed;
-    let mut song_in_queue = client.command(commands::CurrentSong).await?;
+    let mut current_song = client.command(CurrentSong).await?;
 
     let mut start_time = SystemTime::now();
 
-    'outer: loop {
-        loop {
-            match state_changes.next().await {
-                Some(ConnectionEvent::SubsystemChange(Subsystem::Player)) => break,
-                Some(ConnectionEvent::SubsystemChange(_)) => continue,
-                _ => break 'outer,
+    loop {
+        match state_changes.next().await {
+            Some(ConnectionEvent::SubsystemChange(Subsystem::Player)) => {
+                (length, start_playtime, start_time, current_song) = handle_player(
+                    &client,
+                    &tx,
+                    length,
+                    start_playtime,
+                    start_time,
+                    current_song,
+                )
+                .await?
             }
-        }
-
-        let stats = client.command(commands::Stats).await?;
-        let status = client.command(commands::Status).await?;
-
-        let elapsed = status.elapsed.unwrap_or_default();
-        let cur_playtime = stats.playtime;
-
-        match (
-            &song_in_queue,
-            status.current_song.map(|s| s.1).zip(status.duration),
-        ) {
-            (Some(song), Some((id, _))) if song.id == id => {
-                if check_scrobble(start_playtime, cur_playtime, length)
-                    && elapsed < Duration::from_secs(1)
-                {
-                    match scrobble_info(&song.song, start_time) {
-                        Err(e) => eprintln!("can't scrobble song: {e}"),
-                        Ok(info) => tx.send(Message::Scrobble(info)).await?,
-                    }
-                    start_playtime = cur_playtime;
-                    start_time = SystemTime::now();
-                }
+            Some(ConnectionEvent::SubsystemChange(Subsystem::Message)) => {
+                handle_message(&client, &tx, current_song.as_ref()).await?
             }
-
-            (old, new) => {
-                if check_scrobble(start_playtime, cur_playtime, length) && let Some(song) = old {
-                    match scrobble_info(&song.song, start_time) {
-                        Err(e) => eprintln!("can't scrobble song: {e}"),
-                        Ok(info) => tx.send(Message::Scrobble(info)).await?,
-                    }
-                }
-                start_playtime = cur_playtime;
-                length = new.map_or(length, |s| s.1);
-                song_in_queue = client.command(commands::CurrentSong).await?;
-                start_time = SystemTime::now();
-            }
+            Some(ConnectionEvent::SubsystemChange(_)) => continue,
+            _ => break,
         }
     }
     Err(anyhow!("Connection closed by server"))
+}
+
+async fn handle_player(
+    client: &MpdClient,
+    tx: &mpsc::Sender<Message>,
+    length: Duration,
+    start_playtime: Duration,
+    start_time: SystemTime,
+    current_song: Option<SongInQueue>,
+) -> anyhow::Result<(Duration, Duration, SystemTime, Option<SongInQueue>)> {
+    let stats = client.command(Stats).await?;
+    let status = client.command(Status).await?;
+
+    let elapsed = status.elapsed.unwrap_or_default();
+    let cur_playtime = stats.playtime;
+
+    match (
+        &current_song,
+        status.current_song.map(|s| s.1).zip(status.duration),
+    ) {
+        (Some(song), Some((id, _))) if song.id == id => {
+            if check_scrobble(start_playtime, cur_playtime, length)
+                && elapsed < Duration::from_secs(1)
+            {
+                match scrobble_info(&song.song, start_time) {
+                    Err(e) => eprintln!("can't scrobble song: {e}"),
+                    Ok(info) => tx.send(Message::Scrobble(info)).await?,
+                }
+                Ok((length, cur_playtime, SystemTime::now(), current_song))
+            } else {
+                Ok((length, start_playtime, start_time, current_song))
+            }
+        }
+
+        (old, new) => {
+            if check_scrobble(start_playtime, cur_playtime, length) && let Some(song) = old {
+                    match scrobble_info(&song.song, start_time) {
+                        Err(e) => eprintln!("can't scrobble song: {e}"),
+                        Ok(info) => tx.send(Message::Scrobble(info)).await?,
+                    }
+                }
+            Ok((
+                new.map_or(length, |s| s.1),
+                cur_playtime,
+                SystemTime::now(),
+                client.command(CurrentSong).await?,
+            ))
+        }
+    }
+}
+
+async fn handle_message(
+    client: &MpdClient,
+    _tx: &mpsc::Sender<Message>,
+    _current_song: Option<&SongInQueue>,
+) -> anyhow::Result<()> {
+    let messages = client.command(ReadChannelMessages).await?;
+    for m in messages {
+        println!("{m:?}");
+    }
+    Ok(())
 }
 
 #[inline]
