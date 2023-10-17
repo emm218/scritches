@@ -152,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
             match msg {
                 Message::Scrobble(info) => work_queue.scrobble_queue.push(info),
                 Message::Action(action) => work_queue.action_queue.push_back(action),
-                Message::NowPlaying(_) => {}
+                Message::NowPlaying { .. } => {}
             }
             work_queue.write_queue(&mut queue_file).expect("aaaaa");
         }
@@ -236,7 +236,7 @@ async fn handle_player(
                 }
             let new_song = client.command(CurrentSong).await?;
             if let Some(Ok(info)) = new_song.as_ref().map(|s| basic_info(&s.song)) {
-                tx.send(Message::NowPlaying(info)).await?;
+                tx.send(Message::now_playing(info)).await?;
             }
             Ok((
                 new.map_or(length, |s| s.1),

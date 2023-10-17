@@ -21,7 +21,7 @@ pub struct BasicInfo {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
     Scrobble(ScrobbleInfo),
-    NowPlaying(BasicInfo),
+    NowPlaying { title: String, artist: String },
     Action(Action),
 }
 
@@ -32,6 +32,13 @@ pub enum Action {
 }
 
 impl Message {
+    pub fn now_playing(info: BasicInfo) -> Self {
+        Message::NowPlaying {
+            title: info.title,
+            artist: info.artist,
+        }
+    }
+
     pub fn love_track(info: BasicInfo) -> Self {
         Message::Action(Action::LoveTrack {
             title: info.title,
