@@ -13,6 +13,7 @@ use mpd_client::{
 use serde_derive::{Deserialize, Serialize};
 use tokio::{
     net::{TcpStream, UnixStream},
+    select,
     sync::mpsc,
 };
 
@@ -24,7 +25,7 @@ use std::{
 mod config;
 mod last_fm;
 
-use last_fm::{Action, BasicInfo, Message, ScrobbleInfo};
+use last_fm::{Action, BasicInfo, Client as LastFmClient, Message, ScrobbleInfo};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkQueue {
@@ -40,10 +41,36 @@ impl WorkQueue {
         }
     }
 
-    pub fn write_queue(&self, queue_file: &mut File) -> bincode::Result<()> {
+    pub fn write(&self, queue_file: &mut File) -> bincode::Result<()> {
         queue_file.set_len(0)?;
         queue_file.rewind()?;
         bincode::serialize_into(queue_file, self)
+    }
+
+    pub fn has_work(&self) -> bool {
+        !(self.scrobble_queue.is_empty() && self.action_queue.is_empty())
+    }
+
+    pub async fn do_work(
+        &mut self,
+        client: &mut LastFmClient,
+        queue_file: &mut File,
+    ) -> bincode::Result<()> {
+        println!("scrobbling from queue: {} songs", self.scrobble_queue.len());
+        while let Some(info) = self.scrobble_queue.front() {
+            match client.scrobble_one(info).await {
+                Ok(_) => {
+                    self.scrobble_queue.pop_front();
+                }
+                Err(_) => {
+                    eprintln!("client lost connection...");
+                    println!("{} songs still in queue", self.scrobble_queue.len());
+                    break;
+                }
+            }
+        }
+        self.write(queue_file)?;
+        Ok(())
     }
 }
 
@@ -144,18 +171,34 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mut queue_file = File::create(&settings.queue_path)?;
+    let mut last_fm_client = LastFmClient::new();
     // write queue out immediately to avoid empty queue file
-    work_queue.write_queue(&mut queue_file)?;
+    work_queue.write(&mut queue_file)?;
+
+    work_queue
+        .do_work(&mut last_fm_client, &mut queue_file)
+        .await?;
 
     tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            println!("{msg:?}");
-            match msg {
-                Message::Scrobble(info) => work_queue.scrobble_queue.push_back(info),
-                Message::Action(action) => work_queue.action_queue.push_back(action),
-                Message::NowPlaying { .. } => {}
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            let r = rx.recv();
+            let t = interval.tick();
+            select! {
+                Some(msg) = r => {
+                    println!("foo");
+                    match msg {
+                        Message::Scrobble(info) => work_queue.scrobble_queue.push_back(info),
+                        Message::Action(action) => work_queue.action_queue.push_back(action),
+                        _ => {}
+                    }
+                    work_queue.write(&mut queue_file).expect("aaaaa")
+                },
+                _ = t => work_queue.do_work(&mut last_fm_client, &mut queue_file).await.expect("aaaaa"),
+                else => break,
             }
-            work_queue.write_queue(&mut queue_file).expect("aaaaa");
         }
     });
 
@@ -186,7 +229,7 @@ async fn main() -> anyhow::Result<()> {
             }
             Some(ConnectionEvent::SubsystemChange(Subsystem::Message)) => {
                 if let Some(song) = current_song.as_ref() {
-                    handle_message(&client, &tx, song).await?
+                    handle_mpd_msg(&client, &tx, song).await?
                 }
             }
             Some(ConnectionEvent::SubsystemChange(_)) => continue,
@@ -249,7 +292,7 @@ async fn handle_player(
     }
 }
 
-async fn handle_message(
+async fn handle_mpd_msg(
     client: &MpdClient,
     tx: &mpsc::Sender<Message>,
     current_song: &SongInQueue,
@@ -269,9 +312,12 @@ async fn handle_message(
     Ok(())
 }
 
+async fn handle_msg() {}
+
 #[inline]
 fn check_scrobble(start: Duration, cur: Duration, length: Duration) -> bool {
-    (cur - start) >= min(Duration::from_secs(240), length / 2) && length > Duration::from_secs(30)
+    true
+    // (cur - start) >= min(Duration::from_secs(240), length / 2) && length > Duration::from_secs(30)
 }
 
 fn scrobble_info(song: &Song, start_time: SystemTime) -> Result<ScrobbleInfo, SongError> {
