@@ -265,7 +265,7 @@ async fn handle_message(
 
 #[inline]
 fn check_scrobble(start: Duration, cur: Duration, length: Duration) -> bool {
-    (cur - start) >= min(Duration::from_secs(240), length / 2)
+    (cur - start) >= min(Duration::from_secs(240), length / 2) && length > Duration::from_secs(30)
 }
 
 fn scrobble_info(song: &Song, start_time: SystemTime) -> Result<ScrobbleInfo, SongError> {
