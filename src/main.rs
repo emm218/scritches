@@ -10,7 +10,6 @@ use mpd_client::{
     tag::Tag,
     Client as MpdClient,
 };
-use serde_derive::{Deserialize, Serialize};
 use tokio::{
     net::{TcpStream, UnixStream},
     select,
@@ -18,8 +17,14 @@ use tokio::{
 };
 
 use std::{
-    cmp::min, collections::VecDeque, fs::File, io::Seek, path::PathBuf, string::ToString,
-    time::Duration, time::SystemTime,
+    cmp::min,
+    collections::VecDeque,
+    fs::File,
+    io::{self, Seek},
+    path::{Path, PathBuf},
+    string::ToString,
+    time::Duration,
+    time::SystemTime,
 };
 
 mod config;
@@ -27,35 +32,44 @@ mod last_fm;
 
 use last_fm::{Action, BasicInfo, Client as LastFmClient, Message, ScrobbleInfo};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 struct WorkQueue {
-    pub scrobble_queue: VecDeque<ScrobbleInfo>,
-    pub action_queue: VecDeque<Action>,
+    scrobble_queue: VecDeque<ScrobbleInfo>,
+    action_queue: VecDeque<Action>,
+    queue_file: File,
 }
 
 impl WorkQueue {
-    fn new() -> Self {
-        Self {
-            scrobble_queue: VecDeque::new(),
-            action_queue: VecDeque::new(),
-        }
+    fn new(path: &Path) -> io::Result<Self> {
+        let f = File::open(path)?;
+        let (scrobble_queue, action_queue) = bincode::deserialize_from(f).unwrap_or_else(|e| {
+            eprintln!("unable to load queue file: {e}");
+            (VecDeque::new(), VecDeque::new())
+        });
+
+        let queue_file = File::create(path)?;
+
+        Ok(Self {
+            scrobble_queue,
+            action_queue,
+            queue_file,
+        })
     }
 
-    pub fn write(&self, queue_file: &mut File) -> bincode::Result<()> {
-        queue_file.set_len(0)?;
-        queue_file.rewind()?;
-        bincode::serialize_into(queue_file, self)
+    pub fn write(&mut self) -> bincode::Result<()> {
+        self.queue_file.set_len(0)?;
+        self.queue_file.rewind()?;
+        bincode::serialize_into(
+            &self.queue_file,
+            &(&self.scrobble_queue, &self.action_queue),
+        )
     }
 
     pub fn has_work(&self) -> bool {
         !(self.scrobble_queue.is_empty() && self.action_queue.is_empty())
     }
 
-    pub async fn do_work(
-        &mut self,
-        client: &mut LastFmClient,
-        queue_file: &mut File,
-    ) -> bincode::Result<()> {
+    pub async fn do_work(&mut self, client: &mut LastFmClient) -> bincode::Result<()> {
         println!("scrobbling from queue: {} songs", self.scrobble_queue.len());
         while let Some(info) = self.scrobble_queue.front() {
             match client.scrobble_one(info).await {
@@ -69,8 +83,18 @@ impl WorkQueue {
                 }
             }
         }
-        self.write(queue_file)?;
+        self.write()?;
         Ok(())
+    }
+
+    pub fn add_scrobble(&mut self, info: ScrobbleInfo) -> bincode::Result<()> {
+        self.scrobble_queue.push_back(info);
+        self.write()
+    }
+
+    pub fn add_action(&mut self, action: Action) -> bincode::Result<()> {
+        self.action_queue.push_back(action);
+        self.write()
     }
 }
 
@@ -159,25 +183,12 @@ async fn main() -> anyhow::Result<()> {
 
     let (tx, mut rx) = mpsc::channel(5);
 
-    let mut work_queue = match File::open(&settings.queue_path) {
-        Ok(f) => match bincode::deserialize_from(f) {
-            Ok(wq) => wq,
-            Err(e) => {
-                eprintln!("unable to load queue file: {e}");
-                WorkQueue::new()
-            }
-        },
-        Err(_) => WorkQueue::new(),
-    };
-
-    let mut queue_file = File::create(&settings.queue_path)?;
+    let mut work_queue = WorkQueue::new(&settings.queue_path)?;
     let mut last_fm_client = LastFmClient::new();
     // write queue out immediately to avoid empty queue file
-    work_queue.write(&mut queue_file)?;
+    work_queue.write()?;
 
-    work_queue
-        .do_work(&mut last_fm_client, &mut queue_file)
-        .await?;
+    work_queue.do_work(&mut last_fm_client).await?;
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
@@ -185,19 +196,32 @@ async fn main() -> anyhow::Result<()> {
 
         loop {
             let r = rx.recv();
-            let t = interval.tick();
-            select! {
-                Some(msg) = r => {
-                    println!("foo");
-                    match msg {
-                        Message::Scrobble(info) => work_queue.scrobble_queue.push_back(info),
-                        Message::Action(action) => work_queue.action_queue.push_back(action),
-                        _ => {}
+            if work_queue.has_work() {
+                let t = interval.tick();
+                select! {
+                    Some(msg) = r => {
+                        match msg {
+                            Message::Scrobble(info) => work_queue.add_scrobble(info).expect("aaaaa"),
+                            Message::Action(action) => work_queue.add_action(action).expect("aaaaa"),
+                            _ => {}
+                        }
+                        work_queue.do_work(&mut last_fm_client).await
+                    },
+                    _ = t => work_queue.do_work(&mut last_fm_client).await,
+                    else => break,
+                }.expect("aaaaa");
+            } else if let Some(msg) = r.await {
+                match msg {
+                    Message::Scrobble(info) => {
+                        if last_fm_client.scrobble_one(&info).await.is_err() {
+                            work_queue.add_scrobble(info).expect("aaaaa");
+                        }
                     }
-                    work_queue.write(&mut queue_file).expect("aaaaa")
-                },
-                _ = t => work_queue.do_work(&mut last_fm_client, &mut queue_file).await.expect("aaaaa"),
-                else => break,
+                    Message::Action(action) => work_queue.add_action(action).expect("aaaaa"),
+                    _ => {}
+                }
+            } else {
+                break;
             }
         }
     });
