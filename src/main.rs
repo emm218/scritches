@@ -40,6 +40,14 @@ struct WorkQueue {
     queue_file: File,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum WorkError {
+    #[error(transparent)]
+    BinCode(#[from] bincode::Error),
+    #[error(transparent)]
+    LastFm(#[from] last_fm::Error),
+}
+
 impl WorkQueue {
     fn new(path: &Path) -> io::Result<Self> {
         let f = File::open(path)?;
@@ -70,22 +78,14 @@ impl WorkQueue {
         !(self.scrobble_queue.is_empty() && self.action_queue.is_empty())
     }
 
-    pub async fn do_work(&mut self, client: &mut LastFmClient) -> bincode::Result<()> {
+    pub async fn do_work(&mut self, client: &mut LastFmClient) -> Result<(), WorkError> {
         println!("scrobbling from queue: {} songs", self.scrobble_queue.len());
         while !self.scrobble_queue.is_empty() {
             println!("batch");
             let range = ..min(4, self.scrobble_queue.len());
             let batch = &self.scrobble_queue.make_contiguous()[range];
-            match client.scrobble_many(batch).await {
-                Ok(_) => {
-                    self.scrobble_queue.drain(range);
-                }
-                Err(_) => {
-                    eprintln!("client lost connection...");
-                    println!("{} songs still in queue", self.scrobble_queue.len());
-                    break;
-                }
-            }
+            client.scrobble_many(batch).await?;
+            self.scrobble_queue.drain(range);
         }
         self.write()?;
         Ok(())
@@ -162,28 +162,50 @@ async fn main() -> anyhow::Result<()> {
     // write queue out immediately to avoid empty queue file
     work_queue.write()?;
 
-    work_queue.do_work(&mut last_fm_client).await?;
+    if work_queue.has_work() {
+        work_queue.do_work(&mut last_fm_client).await?;
+    }
+
+    let max_retry_time = Duration::from_secs(settings.max_retry_time);
 
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(10));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut retry_time = Duration::from_secs(15);
 
         loop {
+            retry_time = min(max_retry_time, retry_time);
             let r = rx.recv();
+            let t = tokio::time::sleep(retry_time);
+
             if work_queue.has_work() {
-                let t = interval.tick();
                 select! {
                     Some(msg) = r => {
                         match msg {
-                            Message::Scrobble(info) => work_queue.add_scrobble(info).expect("aaaaa"),
-                            Message::Action(action) => work_queue.add_action(action).expect("aaaaa"),
+                            Message::Scrobble(info) => {
+                                work_queue.add_scrobble(info).expect("aaaaa");
+                                match work_queue.do_work(&mut last_fm_client).await {
+                                    Ok(_) => retry_time = Duration::from_secs(15),
+                                    Err(WorkError::BinCode(_)) => panic!("aaaaa"),
+                                    _ => {},
+                                }
+                            }
+                            Message::Action(action) => {
+                                work_queue.add_action(action).expect("aaaaa");
+                                match work_queue.do_work(&mut last_fm_client).await {
+                                    Ok(_) => retry_time = Duration::from_secs(15),
+                                    Err(WorkError::BinCode(_)) => panic!("aaaaa"),
+                                    _ => {},
+                                }
+                            }
                             _ => {}
-                        }
-                        work_queue.do_work(&mut last_fm_client).await
+                        };
                     },
-                    _ = t => work_queue.do_work(&mut last_fm_client).await,
+                    () = t => match work_queue.do_work(&mut last_fm_client).await {
+                            Ok(_) => retry_time = Duration::from_secs(15),
+                            Err(WorkError::LastFm(_)) => retry_time *= 2,
+                            Err(WorkError::BinCode(_)) => panic!("aaaaa"),
+                        },
                     else => break,
-                }.expect("aaaaa");
+                };
             } else if let Some(msg) = r.await {
                 match msg {
                     Message::Scrobble(info) => {
