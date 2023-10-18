@@ -5,14 +5,12 @@ with MPD so I'm trying to roll my own
 
 ## Features
 
-In addition to scrobbling, updating now playing status, and saving scrobbles
-while offline, scritches lets you[^1] love or unlove tracks via messages on mpd's
-client to client communication subsystem. Using `mpc` you can love the
-current track with `mpc sendmessage scritches love` or unlove it with `mpc
-sendmessage scritches unlove`. If scritches can't connect to last.fm then
-these actions will be saved for later in the same way that scrobbles are.
-
-[^1]: or, will let you once it's finished
+- scrobble songs
+- detects repeated songs properly
+- update now playing status
+- (un)love tracks through MPD client-to-client messages (e.g. `mpc sendmessage 
+  scritches love` to love current track)
+- save scrobbles and (un)loves to disk while unable to connect
 
 ## Configuration
 
@@ -39,7 +37,3 @@ Limitations on how MPD reports events make it non-trivial to tell when a song is
 repeated. The logic used here works fine in the normal case of listening to a
 song all the way through before restarting but breaks slightly in the case of
 restarting a song over and over. I don't know why you'd do that though.
-
-## Todo
-
-- handle talking to last.fm API
