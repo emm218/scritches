@@ -1,7 +1,7 @@
 # Scritches 🐱
 
 I have some problems with existing solutions for scrobbling my music to last.fm
-with MPD so I'm trying to roll my own
+with MPD so I'm trying to roll my own.
 
 ## Features
 
@@ -23,8 +23,8 @@ Current config values:
 - `mpd_addr` the TCP address to connect to MPD at (default `localhost:6600`)
 - `mpd_socket` the path to a unix socket to connect to MPD at (default none)
 - `mpd_password` the password to connect to MPD with (default none)
-- `queue_path` the path to the file that should be used to log scrobbles when
-  not connected to last.fm
+- `queue_path` file that should be used to log scrobbles when offline (default
+  `$XDG_STATE_HOME/scritches/queue`)
 - `max_retry_time` the maximum time to take between retries in seconds (default
   960/16 mins)
 
