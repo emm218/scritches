@@ -21,16 +21,17 @@ use std::{
     collections::VecDeque,
     fs::File,
     io::{self, Seek},
-    path::{Path, PathBuf},
+    path::Path,
     string::ToString,
     time::Duration,
     time::SystemTime,
 };
 
-mod config;
 mod last_fm;
+mod settings;
 
 use last_fm::{Action, BasicInfo, Client as LastFmClient, Message, ScrobbleInfo};
+use settings::Args;
 
 #[derive(Debug)]
 struct WorkQueue {
@@ -106,30 +107,6 @@ enum SongError {
     NoArtist,
 }
 
-#[derive(Debug, Parser)]
-#[command(version)]
-struct Args {
-    /// Path to config file
-    #[arg(short, long)]
-    config: Option<PathBuf>,
-
-    /// TCP socket address for MPD
-    #[arg(short, long)]
-    addr: Option<String>,
-
-    /// Unix socket for MPD
-    #[arg(short, long)]
-    socket: Option<String>,
-
-    /// MPD password
-    #[arg(short, long)]
-    password: Option<String>,
-
-    /// Queue file for offline use
-    #[arg(short, long)]
-    queue: Option<PathBuf>,
-}
-
 enum Connector {
     Tcp(TcpStream),
     Uds(UnixStream),
@@ -151,13 +128,7 @@ impl Connector {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let settings = config::Settings::new(
-        args.addr,
-        args.socket,
-        args.password,
-        args.config,
-        args.queue,
-    )?;
+    let settings = settings::Settings::new(args)?;
 
     let conn: Connector = if let Some(sock) = settings.mpd_socket {
         println!("connecting to MPD at {}", sock.display());
@@ -336,12 +307,9 @@ async fn handle_mpd_msg(
     Ok(())
 }
 
-async fn handle_msg() {}
-
 #[inline]
 fn check_scrobble(start: Duration, cur: Duration, length: Duration) -> bool {
-    true
-    // (cur - start) >= min(Duration::from_secs(240), length / 2) && length > Duration::from_secs(30)
+    (cur - start) >= min(Duration::from_secs(240), length / 2) && length > Duration::from_secs(30)
 }
 
 fn scrobble_info(song: &Song, start_time: SystemTime) -> Result<ScrobbleInfo, SongError> {
