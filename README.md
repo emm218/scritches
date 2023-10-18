@@ -8,8 +8,8 @@ with MPD so I'm trying to roll my own
 - scrobble songs
 - detects repeated songs properly
 - update now playing status
-- (un)love tracks through MPD client-to-client messages (e.g. `mpc sendmessage 
-  scritches love` to love current track)
+- (un)love tracks through MPD client-to-client messages (e.g. 
+  `mpc sendmessage scritches love` to love current track)
 - save scrobbles and (un)loves to disk while unable to connect
 
 ## Configuration
