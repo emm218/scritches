@@ -42,7 +42,7 @@ pub struct Settings {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum SettingsError {
+pub enum Error {
     #[error("config error: {0}")]
     Config(#[from] config::ConfigError),
 
@@ -60,7 +60,7 @@ pub enum SettingsError {
 }
 
 impl Settings {
-    pub fn new(args: Args) -> Result<Self, SettingsError> {
+    pub fn new(args: Args) -> Result<Self, Error> {
         let xdg_dirs = xdg::BaseDirectories::with_prefix("scritches")?;
         let mut config_builder = Config::builder()
             .set_default("mpd_addr", "localhost:6600")?
@@ -69,7 +69,7 @@ impl Settings {
                 xdg_dirs
                     .place_state_file("queue")?
                     .to_str()
-                    .ok_or(SettingsError::QueuePath)?,
+                    .ok_or(Error::QueuePath)?,
             )?
             .set_default("max_retry_time", 960)?;
 
@@ -86,10 +86,8 @@ impl Settings {
         }
 
         if let Some(queue_path) = args.queue {
-            config_builder = config_builder.set_override(
-                "queue_path",
-                queue_path.to_str().ok_or(SettingsError::QueuePath)?,
-            )?;
+            config_builder = config_builder
+                .set_override("queue_path", queue_path.to_str().ok_or(Error::QueuePath)?)?;
         }
 
         if let Some(time) = args.time {
@@ -98,7 +96,7 @@ impl Settings {
 
         if let Some(config_path) = args.config {
             config_builder = config_builder.add_source(config::File::with_name(
-                config_path.to_str().ok_or(SettingsError::ConfigPath)?,
+                config_path.to_str().ok_or(Error::ConfigPath)?,
             ));
         } else {
             config_builder = config_builder.add_source(
@@ -106,7 +104,7 @@ impl Settings {
                     xdg::BaseDirectories::with_prefix("scritches")?
                         .get_config_file("config")
                         .to_str()
-                        .ok_or(SettingsError::ConfigPath)?,
+                        .ok_or(Error::ConfigPath)?,
                 )
                 .required(false),
             );

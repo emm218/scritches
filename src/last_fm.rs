@@ -42,7 +42,7 @@ impl Message {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum LastFmError {
+pub enum Error {
     #[error("blaaaa")]
     Bla,
 }
@@ -54,40 +54,40 @@ impl Client {
         Self(true)
     }
 
-    pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), LastFmError> {
+    pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), Error> {
         let x = rand::random::<f32>();
         if !self.0 {
-            if x > 0.9 {
+            if x > 2.0 {
                 println!("{} - {}", info.artist, info.title);
                 self.0 = true;
                 Ok(())
             } else {
-                Err(LastFmError::Bla)
+                Err(Error::Bla)
             }
         } else if x > 0.8 {
             self.0 = false;
-            Err(LastFmError::Bla)
+            Err(Error::Bla)
         } else {
             println!("{} - {}", info.artist, info.title);
             Ok(())
         }
     }
 
-    pub async fn scrobble_many(&mut self, infos: &[ScrobbleInfo]) -> Result<(), LastFmError> {
+    pub async fn scrobble_many(&mut self, infos: &[ScrobbleInfo]) -> Result<(), Error> {
         let x = rand::random::<f32>();
         if !self.0 {
-            if x > 0.5 {
+            if x > 2.0 {
                 for info in infos {
                     println!("{} - {}", info.artist, info.title);
                 }
                 self.0 = true;
                 Ok(())
             } else {
-                Err(LastFmError::Bla)
+                Err(Error::Bla)
             }
         } else if x > 0.8 {
             self.0 = false;
-            Err(LastFmError::Bla)
+            Err(Error::Bla)
         } else {
             for info in infos {
                 println!("{} - {}", info.artist, info.title);
