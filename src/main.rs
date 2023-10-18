@@ -36,6 +36,15 @@ enum SongError {
     NoArtist,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum MsgHandleError {
+    #[error("channel closed")]
+    ChannelClosed,
+
+    #[error(transparent)]
+    BinCode(#[from] bincode::Error),
+}
+
 enum Connector {
     Tcp(TcpStream),
     Uds(UnixStream),
@@ -99,52 +108,11 @@ async fn main() -> anyhow::Result<()> {
 
         loop {
             retry_time = min(max_retry_time, retry_time);
-            let r = rx.recv();
-            let t = tokio::time::sleep(retry_time);
 
-            if work_queue.has_work() {
-                select! {
-                    Some(msg) = r => {
-                        match msg {
-                            Message::Scrobble(info) => {
-                                work_queue.add_scrobble(info).expect("aaaaa");
-                                match work_queue.do_work(&mut last_fm_client).await {
-                                    Ok(_) => retry_time = Duration::from_secs(15),
-                                    Err(WorkError::BinCode(_)) => panic!("aaaaa"),
-                                    _ => {},
-                                }
-                            }
-                            Message::Action(action) => {
-                                work_queue.add_action(action).expect("aaaaa");
-                                match work_queue.do_work(&mut last_fm_client).await {
-                                    Ok(_) => retry_time = Duration::from_secs(15),
-                                    Err(WorkError::BinCode(_)) => panic!("aaaaa"),
-                                    _ => {},
-                                }
-                            }
-                            _ => {}
-                        };
-                    },
-                    () = t => match work_queue.do_work(&mut last_fm_client).await {
-                            Ok(_) => retry_time = Duration::from_secs(15),
-                            Err(WorkError::LastFm(_)) => retry_time *= 2,
-                            Err(WorkError::BinCode(_)) => panic!("aaaaa"),
-                        },
-                    else => break,
-                };
-            } else if let Some(msg) = r.await {
-                match msg {
-                    Message::Scrobble(info) => {
-                        if last_fm_client.scrobble_one(&info).await.is_err() {
-                            work_queue.add_scrobble(info).expect("aaaaa");
-                        }
-                    }
-                    Message::Action(action) => work_queue.add_action(action).expect("aaaaa"),
-                    Message::NowPlaying(_) => {}
-                }
-            } else {
-                break;
-            }
+            retry_time =
+                handle_async_msg(&mut rx, retry_time, &mut work_queue, &mut last_fm_client)
+                    .await
+                    .expect("aaaaa");
         }
     });
 
@@ -256,6 +224,54 @@ async fn handle_mpd_msg(
         }
     }
     Ok(())
+}
+
+async fn handle_async_msg(
+    rx: &mut mpsc::Receiver<Message>,
+    retry_time: Duration,
+    work_queue: &mut WorkQueue,
+    last_fm_client: &mut LastFmClient,
+) -> Result<Duration, MsgHandleError> {
+    let r = rx.recv();
+    let t = tokio::time::sleep(retry_time);
+
+    if work_queue.has_work() {
+        select! {
+            Some(msg) = r => {
+                match msg {
+                    Message::Scrobble(info) => work_queue.add_scrobble(info)?,
+                    Message::Action(action) => work_queue.add_action(action)?,
+                    _ => {}
+                };
+                match work_queue.do_work(last_fm_client).await {
+                    Ok(_) => Ok(Duration::from_secs(15)),
+                    Err(WorkError::BinCode(e)) => Err(e.into()),
+                    _ => Ok(retry_time),
+                }
+            },
+            () = t => match work_queue.do_work(last_fm_client).await {
+                    Ok(_) => Ok(Duration::from_secs(15)),
+                    Err(WorkError::LastFm(_)) => Ok(retry_time * 2),
+                    Err(WorkError::BinCode(e)) => Err(e.into()),
+                },
+            else => Err(MsgHandleError::ChannelClosed),
+        }
+    } else if let Some(msg) = r.await {
+        match msg {
+            Message::Scrobble(info) => {
+                if last_fm_client.scrobble_one(&info).await.is_err() {
+                    work_queue.add_scrobble(info)?;
+                }
+            }
+            Message::Action(action) => {
+                work_queue.add_action(action)?;
+            }
+            Message::NowPlaying(_) => {}
+        }
+        Ok(Duration::from_secs(15))
+    } else {
+        Err(MsgHandleError::ChannelClosed)
+    }
 }
 
 #[inline]
