@@ -1,4 +1,5 @@
 #![feature(let_chains)]
+#![feature(iter_intersperse)]
 #![feature(duration_constants)]
 
 use anyhow::anyhow;
@@ -16,7 +17,12 @@ use tokio::{
     sync::mpsc,
 };
 
-use std::{cmp::min, string::ToString, time::Duration, time::SystemTime};
+use std::{
+    cmp::min,
+    string::ToString,
+    time::SystemTime,
+    time::{Duration, UNIX_EPOCH},
+};
 
 mod last_fm;
 mod settings;
@@ -98,7 +104,9 @@ async fn main() -> anyhow::Result<()> {
     work_queue.write()?;
 
     if work_queue.has_work() {
-        work_queue.do_work(&mut last_fm_client).await?;
+        if let Err(WorkError::BinCode(e)) = work_queue.do_work(&mut last_fm_client).await {
+            panic!("{e}");
+        };
     }
 
     let max_retry_time = Duration::from_secs(settings.max_retry_time);
@@ -130,7 +138,7 @@ async fn main() -> anyhow::Result<()> {
     let mut start_playtime = stats.playtime - elapsed;
     let mut current_song = client.command(CurrentSong).await?;
 
-    let mut start_time = SystemTime::now();
+    let mut start_time = SystemTime::now().duration_since(UNIX_EPOCH)?;
 
     loop {
         match state_changes.next().await {
@@ -162,9 +170,9 @@ async fn handle_player(
     tx: &mpsc::Sender<Message>,
     length: Duration,
     start_playtime: Duration,
-    start_time: SystemTime,
+    start_time: Duration,
     current_song: Option<SongInQueue>,
-) -> anyhow::Result<(Duration, Duration, SystemTime, Option<SongInQueue>)> {
+) -> anyhow::Result<(Duration, Duration, Duration, Option<SongInQueue>)> {
     let stats = client.command(Stats).await?;
     let status = client.command(Status).await?;
 
@@ -183,7 +191,12 @@ async fn handle_player(
                     Err(e) => eprintln!("can't scrobble song: {e}"),
                     Ok(info) => tx.send(Message::Scrobble(info)).await?,
                 }
-                Ok((length, cur_playtime, SystemTime::now(), current_song))
+                Ok((
+                    length,
+                    cur_playtime,
+                    SystemTime::now().duration_since(UNIX_EPOCH)?,
+                    current_song,
+                ))
             } else {
                 Ok((length, start_playtime, start_time, current_song))
             }
@@ -203,7 +216,7 @@ async fn handle_player(
             Ok((
                 new.map_or(length, |s| s.1),
                 cur_playtime,
-                SystemTime::now(),
+                SystemTime::now().duration_since(UNIX_EPOCH)?,
                 new_song,
             ))
         }
@@ -283,7 +296,7 @@ fn check_scrobble(start: Duration, cur: Duration, length: Duration) -> bool {
     (cur - start) >= min(Duration::from_secs(240), length / 2) && length > Duration::from_secs(30)
 }
 
-fn scrobble_info(song: &Song, start_time: SystemTime) -> Result<ScrobbleInfo, SongError> {
+fn scrobble_info(song: &Song, start_time: Duration) -> Result<ScrobbleInfo, SongError> {
     let title = song.title().ok_or(SongError::NoTitle)?.to_string();
     let artist = (!song.artists().is_empty())
         .then(|| song.artists().join(", "))
@@ -303,7 +316,7 @@ fn scrobble_info(song: &Song, start_time: SystemTime) -> Result<ScrobbleInfo, So
         album,
         album_artist,
         track_id,
-        start_time,
+        start_time: start_time.as_secs().to_string(),
     })
 }
 
