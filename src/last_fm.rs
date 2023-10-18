@@ -57,7 +57,7 @@ impl Client {
     pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), LastFmError> {
         let x = rand::random::<f32>();
         if !self.0 {
-            if x > 0.9 {
+            if x > 0.5 {
                 println!("{} - {}", info.artist, info.title);
                 self.0 = true;
                 Ok(())
