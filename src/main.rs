@@ -245,7 +245,7 @@ async fn handle_async_msg(
                 match msg {
                     Message::Scrobble(info) => work_queue.add_scrobble(info)?,
                     Message::Action(action) => work_queue.add_action(action)?,
-                    _ => {}
+                    _ => { return Ok(retry_time); }
                 };
                 match work_queue.do_work(client).await {
                     Ok(_) => Ok(Duration::from_secs(15)),
