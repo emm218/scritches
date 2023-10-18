@@ -1,12 +1,27 @@
 use std::iter::once;
 
 use md5::{Digest, Md5};
+use once_cell::sync::Lazy;
 use serde_derive::{Deserialize, Serialize};
 use serde_urlencoded::ser::Error as SerializeError;
 
 static API_KEY: &str = "936df272ba862808520323da81f3fc6e";
 static API_SECRET: &str = "d401bc1f1a702af8e6bd8c50bce9b11d";
 static API_URL: &str = "https://ws.audioscrobbler.com/2.0/";
+
+macro_rules! with_indices {
+    ($l:literal) => {
+        Lazy::new(|| array_init::array_init(|i| format!(concat!($l, "[{}]"), i)))
+    };
+}
+
+// this is mildly evil but prevents extra memory allocations, yippee!!!
+static TITLE: Lazy<[String; 50]> = with_indices!("title");
+static ARTIST: Lazy<[String; 50]> = with_indices!("artist");
+static ALBUM: Lazy<[String; 50]> = with_indices!("album");
+static ALBUMARTIST: Lazy<[String; 50]> = with_indices!("albumArtist");
+static MBID: Lazy<[String; 50]> = with_indices!("mbid");
+static TIMESTAMP: Lazy<[String; 50]> = with_indices!("timestamp");
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ScrobbleInfo {
@@ -19,33 +34,33 @@ pub struct ScrobbleInfo {
 }
 
 impl ScrobbleInfo {
-    pub fn push_params<'a>(&'a self, out: &mut Vec<(String, &'a str)>) {
-        out.push(("title".into(), &self.title));
-        out.push(("artist".into(), &self.artist));
-        out.push(("timestamp".into(), &self.start_time));
+    pub fn push_params<'a>(&'a self, out: &mut Vec<(&str, &'a str)>) {
+        out.push(("title", &self.title));
+        out.push(("artist", &self.artist));
+        out.push(("timestamp", &self.start_time));
         if let Some(album) = self.album.as_ref() {
-            out.push(("album".into(), album));
+            out.push(("album", album));
         }
         if let Some(album_artist) = self.album_artist.as_ref() {
-            out.push(("albumArtist".into(), album_artist));
+            out.push(("albumArtist", album_artist));
         }
         if let Some(mbid) = self.track_id.as_ref() {
-            out.push(("mbid".into(), mbid));
+            out.push(("mbid", mbid));
         }
     }
 
-    pub fn push_params_idx<'a>(&'a self, idx: usize, out: &mut Vec<(String, &'a str)>) {
-        out.push((format!("title[{idx}]"), &self.title));
-        out.push((format!("artist[{idx}]"), &self.artist));
-        out.push((format!("timestamp[{idx}]"), &self.start_time));
+    pub fn push_params_idx<'a>(&'a self, idx: usize, out: &mut Vec<(&str, &'a str)>) {
+        out.push((&TITLE[idx], &self.title));
+        out.push((&ARTIST[idx], &self.artist));
+        out.push((&TIMESTAMP[idx], &self.start_time));
         if let Some(album) = self.album.as_ref() {
-            out.push((format!("album[{idx}]"), album));
+            out.push((&ALBUM[idx], album));
         }
         if let Some(album_artist) = self.album_artist.as_ref() {
-            out.push((format!("albumArtist[{idx}]"), album_artist));
+            out.push((&ALBUMARTIST[idx], album_artist));
         }
         if let Some(mbid) = self.track_id.as_ref() {
-            out.push((format!("mbid[{idx}]"), mbid));
+            out.push((&MBID[idx], mbid));
         }
     }
 }
@@ -83,6 +98,9 @@ impl Message {
 pub enum Error {
     #[error(transparent)]
     Serialize(#[from] SerializeError),
+
+    #[error("too many scrobbles in batch. maximum is 50 got {0}")]
+    TooManyScrobbles(usize),
 }
 
 pub struct Client(bool);
@@ -93,10 +111,7 @@ impl Client {
     }
 
     pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), Error> {
-        let mut params = vec![
-            ("method".to_string(), "track.scrobble"),
-            ("api_key".to_string(), API_KEY),
-        ];
+        let mut params = vec![("method", "track.scrobble"), ("api_key", API_KEY)];
 
         info.push_params(&mut params);
 
@@ -105,13 +120,16 @@ impl Client {
     }
 
     pub async fn scrobble_many(&mut self, infos: &[ScrobbleInfo]) -> Result<(), Error> {
+        if infos.len() > 50 {
+            return Err(Error::TooManyScrobbles(infos.len()));
+        }
         let mut params = vec![
-            ("method".to_string(), "track.scrobble"),
-            ("api_key".to_string(), API_KEY),
+            ("method".into(), "track.scrobble"),
+            ("api_key".into(), API_KEY),
         ];
 
         for (i, info) in infos.iter().enumerate() {
-            info.push_params_idx(i, &mut params)
+            info.push_params_idx(i, &mut params);
         }
 
         println!("{}", method_call(&params)?);
@@ -119,7 +137,7 @@ impl Client {
     }
 }
 
-fn method_call(params: &[(String, &str)]) -> Result<String, Error> {
+fn method_call(params: &[(&str, &str)]) -> Result<String, Error> {
     let mut sorted_params = params.iter().collect::<Vec<_>>();
     sorted_params.sort_unstable();
 
@@ -135,7 +153,7 @@ fn method_call(params: &[(String, &str)]) -> Result<String, Error> {
     Ok(serde_urlencoded::to_string(
         params
             .iter()
-            .chain(once(&("api_sig".to_string(), &signature[..])))
+            .chain(once(&("api_sig", &signature[..])))
             .collect::<Vec<_>>(),
     )?)
 }
