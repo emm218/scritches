@@ -231,15 +231,23 @@ async fn handle_mpd_msg(
     let info = basic_info(&current_song.song)?;
 
     let messages = client.command(ReadChannelMessages).await?;
+
+    let mut love = true;
+
     for m in messages {
         if m.1 == "love" {
-            // clone here is evil because we have 2 strings :( but we can't use Arc instead because
-            // it doesn't play nice with serde...oh no
-            tx.send(Message::love_track(info.clone())).await?;
+            love = true;
         } else if m.1 == "unlove" {
-            tx.send(Message::unlove_track(info.clone())).await?;
+            love = false;
         }
     }
+
+    if love {
+        tx.send(Message::love_track(info)).await?;
+    } else {
+        tx.send(Message::unlove_track(info)).await?;
+    }
+
     Ok(())
 }
 
