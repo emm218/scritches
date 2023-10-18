@@ -72,10 +72,13 @@ impl WorkQueue {
 
     pub async fn do_work(&mut self, client: &mut LastFmClient) -> bincode::Result<()> {
         println!("scrobbling from queue: {} songs", self.scrobble_queue.len());
-        while let Some(info) = self.scrobble_queue.front() {
-            match client.scrobble_one(info).await {
+        while !self.scrobble_queue.is_empty() {
+            println!("batch");
+            let range = ..min(4, self.scrobble_queue.len());
+            let batch = &self.scrobble_queue.make_contiguous()[range];
+            match client.scrobble_many(batch).await {
                 Ok(_) => {
-                    self.scrobble_queue.pop_front();
+                    self.scrobble_queue.drain(range);
                 }
                 Err(_) => {
                     eprintln!("client lost connection...");

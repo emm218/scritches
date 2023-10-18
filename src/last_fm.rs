@@ -57,7 +57,7 @@ impl Client {
     pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), LastFmError> {
         let x = rand::random::<f32>();
         if !self.0 {
-            if x > 0.5 {
+            if x > 0.9 {
                 println!("{} - {}", info.artist, info.title);
                 self.0 = true;
                 Ok(())
@@ -69,6 +69,29 @@ impl Client {
             Err(LastFmError::Bla)
         } else {
             println!("{} - {}", info.artist, info.title);
+            Ok(())
+        }
+    }
+
+    pub async fn scrobble_many(&mut self, infos: &[ScrobbleInfo]) -> Result<(), LastFmError> {
+        let x = rand::random::<f32>();
+        if !self.0 {
+            if x > 0.5 {
+                for info in infos {
+                    println!("{} - {}", info.artist, info.title);
+                }
+                self.0 = true;
+                Ok(())
+            } else {
+                Err(LastFmError::Bla)
+            }
+        } else if x > 0.8 {
+            self.0 = false;
+            Err(LastFmError::Bla)
+        } else {
+            for info in infos {
+                println!("{} - {}", info.artist, info.title);
+            }
             Ok(())
         }
     }
