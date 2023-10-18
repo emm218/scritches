@@ -140,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     Message::Action(action) => work_queue.add_action(action).expect("aaaaa"),
-                    _ => {}
+                    Message::NowPlaying(_) => {}
                 }
             } else {
                 break;
@@ -171,11 +171,11 @@ async fn main() -> anyhow::Result<()> {
                     start_time,
                     current_song,
                 )
-                .await?
+                .await?;
             }
             Some(ConnectionEvent::SubsystemChange(Subsystem::Message)) => {
                 if let Some(song) = current_song.as_ref() {
-                    handle_mpd_msg(&client, &tx, song).await?
+                    handle_mpd_msg(&client, &tx, song).await?;
                 }
             }
             Some(ConnectionEvent::SubsystemChange(_)) => continue,
