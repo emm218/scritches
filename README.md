@@ -23,7 +23,7 @@ Current config values:
 - `mpd_addr` the TCP address to connect to MPD at (default `localhost:6600`)
 - `mpd_socket` the path to a unix socket to connect to MPD at (default none)
 - `mpd_password` the password to connect to MPD with (default none)
-- `queue_path` file that should be used to log scrobbles when offline (default
+- `queue_path` file to log scrobbles in when offline (default
   `$XDG_STATE_HOME/scritches/queue`)
 - `max_retry_time` the maximum time to take between retries in seconds (default
   960/16 mins)
