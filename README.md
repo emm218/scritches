@@ -27,6 +27,8 @@ Current config values:
 - `mpd_password` the password to connect to MPD with (default none)
 - `queue_path` the path to the file that should be used to log scrobbles when
   not connected to last.fm
+- `max_retry_time` the maximum time to take between retries in seconds (default
+  960/16 mins)
 
 any of these config values can also be set using command line options, which
 will override the value read from the config file.
