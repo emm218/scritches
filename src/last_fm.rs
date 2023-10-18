@@ -123,10 +123,7 @@ impl Client {
         if infos.len() > 50 {
             return Err(Error::TooManyScrobbles(infos.len()));
         }
-        let mut params = vec![
-            ("method".into(), "track.scrobble"),
-            ("api_key".into(), API_KEY),
-        ];
+        let mut params = vec![("method", "track.scrobble"), ("api_key", API_KEY)];
 
         for (i, info) in infos.iter().enumerate() {
             info.push_params_idx(i, &mut params);
