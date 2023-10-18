@@ -110,9 +110,13 @@ async fn main() -> anyhow::Result<()> {
             retry_time = min(max_retry_time, retry_time);
 
             retry_time =
-                handle_async_msg(&mut rx, retry_time, &mut work_queue, &mut last_fm_client)
+                match handle_async_msg(&mut rx, retry_time, &mut work_queue, &mut last_fm_client)
                     .await
-                    .expect("aaaaa");
+                {
+                    Ok(t) => t,
+                    Err(MsgHandleError::ChannelClosed) => break,
+                    Err(MsgHandleError::BinCode(e)) => panic!("{e}"),
+                }
         }
     });
 
@@ -230,7 +234,7 @@ async fn handle_async_msg(
     rx: &mut mpsc::Receiver<Message>,
     retry_time: Duration,
     work_queue: &mut WorkQueue,
-    last_fm_client: &mut LastFmClient,
+    client: &mut LastFmClient,
 ) -> Result<Duration, MsgHandleError> {
     let r = rx.recv();
     let t = tokio::time::sleep(retry_time);
@@ -243,13 +247,13 @@ async fn handle_async_msg(
                     Message::Action(action) => work_queue.add_action(action)?,
                     _ => {}
                 };
-                match work_queue.do_work(last_fm_client).await {
+                match work_queue.do_work(client).await {
                     Ok(_) => Ok(Duration::from_secs(15)),
                     Err(WorkError::BinCode(e)) => Err(e.into()),
                     _ => Ok(retry_time),
                 }
             },
-            () = t => match work_queue.do_work(last_fm_client).await {
+            () = t => match work_queue.do_work(client).await {
                     Ok(_) => Ok(Duration::from_secs(15)),
                     Err(WorkError::LastFm(_)) => Ok(retry_time * 2),
                     Err(WorkError::BinCode(e)) => Err(e.into()),
@@ -259,7 +263,7 @@ async fn handle_async_msg(
     } else if let Some(msg) = r.await {
         match msg {
             Message::Scrobble(info) => {
-                if last_fm_client.scrobble_one(&info).await.is_err() {
+                if client.scrobble_one(&info).await.is_err() {
                     work_queue.add_scrobble(info)?;
                 }
             }
