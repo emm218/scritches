@@ -20,7 +20,7 @@ macro_rules! with_indices {
 }
 
 // this is mildly evil but prevents extra memory allocations, yippee!!!
-static TITLE: Lazy<[String; 50]> = with_indices!("title");
+static TRACK: Lazy<[String; 50]> = with_indices!("track");
 static ARTIST: Lazy<[String; 50]> = with_indices!("artist");
 static ALBUM: Lazy<[String; 50]> = with_indices!("album");
 static ALBUMARTIST: Lazy<[String; 50]> = with_indices!("albumArtist");
@@ -28,13 +28,24 @@ static MBID: Lazy<[String; 50]> = with_indices!("mbid");
 static TIMESTAMP: Lazy<[String; 50]> = with_indices!("timestamp");
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ScrobbleInfo {
+pub struct SongInfo {
     pub title: String,
     pub artist: String,
     pub album: Option<String>,
     pub album_artist: Option<String>,
     pub track_id: Option<String>,
-    pub start_time: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ScrobbleInfo {
+    pub timestamp: String,
+    pub song: SongInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BasicInfo {
+    pub title: String,
+    pub artist: String,
 }
 
 trait PushParams<'a, T> {
@@ -42,11 +53,10 @@ trait PushParams<'a, T> {
     fn push_params_idx(&mut self, info: &'a T, idx: usize);
 }
 
-impl<'a> PushParams<'a, ScrobbleInfo> for Vec<(&str, &'a str)> {
-    fn push_params(&mut self, info: &'a ScrobbleInfo) {
-        self.push(("title", &info.title));
+impl<'a> PushParams<'a, SongInfo> for Vec<(&str, &'a str)> {
+    fn push_params(&mut self, info: &'a SongInfo) {
+        self.push(("track", &info.title));
         self.push(("artist", &info.artist));
-        self.push(("timestamp", &info.start_time));
         if let Some(album) = info.album.as_ref() {
             self.push(("album", album));
         }
@@ -58,10 +68,9 @@ impl<'a> PushParams<'a, ScrobbleInfo> for Vec<(&str, &'a str)> {
         }
     }
 
-    fn push_params_idx(&mut self, info: &'a ScrobbleInfo, idx: usize) {
-        self.push((&TITLE[idx], &info.title));
+    fn push_params_idx(&mut self, info: &'a SongInfo, idx: usize) {
+        self.push((&TRACK[idx], &info.title));
         self.push((&ARTIST[idx], &info.artist));
-        self.push((&TIMESTAMP[idx], &info.start_time));
         if let Some(album) = info.album.as_ref() {
             self.push((&ALBUM[idx], album));
         }
@@ -74,16 +83,34 @@ impl<'a> PushParams<'a, ScrobbleInfo> for Vec<(&str, &'a str)> {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BasicInfo {
-    pub title: String,
-    pub artist: String,
+impl<'a> PushParams<'a, BasicInfo> for Vec<(&str, &'a str)> {
+    fn push_params(&mut self, info: &'a BasicInfo) {
+        self.push(("track", &info.title));
+        self.push(("artist", &info.artist));
+    }
+
+    fn push_params_idx(&mut self, info: &'a BasicInfo, idx: usize) {
+        self.push((&TRACK[idx], &info.title));
+        self.push((&ARTIST[idx], &info.artist));
+    }
+}
+
+impl<'a> PushParams<'a, ScrobbleInfo> for Vec<(&str, &'a str)> {
+    fn push_params(&mut self, info: &'a ScrobbleInfo) {
+        self.push(("timestamp", &info.timestamp));
+        self.push_params(&info.song);
+    }
+
+    fn push_params_idx(&mut self, info: &'a ScrobbleInfo, idx: usize) {
+        self.push((&TIMESTAMP[idx], &info.timestamp));
+        self.push_params_idx(&info.song, idx);
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
     Scrobble(ScrobbleInfo),
-    NowPlaying(BasicInfo),
+    NowPlaying(SongInfo),
     Action(Action),
 }
 
@@ -233,28 +260,71 @@ impl Client {
         Ok(serde_json::from_str(&response)?)
     }
 
+    async fn void_method(
+        &self,
+        method: &str,
+        args: Option<Vec<(&str, &str)>>,
+    ) -> Result<(), Error> {
+        let mut params = vec![
+            ("method", method),
+            ("api_key", API_KEY),
+            ("sk", &self.session_key),
+        ];
+
+        if let Some(mut a) = args {
+            params.append(&mut a);
+        }
+
+        let client = &self.client;
+
+        let signed = sign(params);
+        let request = client.post(API_URL).form(
+            &signed
+                .params
+                .iter()
+                .chain(vec![("api_sig", &signed.signature[..]), ("format", "json")].iter())
+                .collect::<Vec<_>>(),
+        );
+        let response = request.send().await?.text().await?;
+
+        println!("{response}");
+
+        if let Ok(e) = serde_json::from_str::<ApiError>(&response) {
+            return Err(e.into());
+        }
+
+        Ok(())
+    }
+
     pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), Error> {
         let mut params = Vec::new();
 
         params.push_params(info);
 
-        self.method_call::<JsonValue>("track.scrobble", Some(params))
-            .await?;
-
-        Ok(())
+        self.void_method("track.scrobble", Some(params)).await
     }
 
     pub async fn scrobble_many(&mut self, infos: &[ScrobbleInfo]) -> Result<(), Error> {
         if infos.len() > 50 {
             return Err(Error::TooManyScrobbles(infos.len()));
         }
-        /* let mut params = Vec::new();
+        let mut params = Vec::new();
 
-        for (i, info) in infos.iter().enumerate() {
-            params.push_params_idx(info, i);
-        } */
+        infos
+            .iter()
+            .enumerate()
+            .for_each(|(i, info)| params.push_params_idx(info, i));
 
-        Ok(())
+        self.void_method("track.scrobble", Some(params)).await
+    }
+
+    pub async fn now_playing(&mut self, info: &SongInfo) -> Result<(), Error> {
+        let mut params = Vec::new();
+
+        params.push_params(info);
+
+        self.void_method("track.updateNowPlaying", Some(params))
+            .await
     }
 }
 

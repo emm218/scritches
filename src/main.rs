@@ -29,7 +29,7 @@ mod settings;
 mod work_queue;
 
 use crate::{
-    last_fm::{BasicInfo, Client as LastFmClient, Message, ScrobbleInfo},
+    last_fm::{BasicInfo, Client as LastFmClient, Message, ScrobbleInfo, SongInfo},
     settings::Args,
     work_queue::{Error as WorkError, WorkQueue},
 };
@@ -213,7 +213,7 @@ async fn handle_player(
                     }
                 }
             let new_song = client.command(CurrentSong).await?;
-            if let Some(Ok(info)) = new_song.as_ref().map(|s| basic_info(&s.song)) {
+            if let Some(Ok(info)) = new_song.as_ref().map(|s| song_info(&s.song)) {
                 tx.send(Message::NowPlaying(info)).await?;
             }
             Ok((
@@ -287,14 +287,17 @@ async fn handle_async_msg(
     } else if let Some(msg) = r.await {
         match msg {
             Message::Scrobble(info) => {
-                if client.scrobble_one(&info).await.is_err() {
+                if let Err(e) = client.scrobble_one(&info).await {
+                    eprintln!("{e}");
                     work_queue.add_scrobble(info)?;
                 }
             }
             Message::Action(action) => {
                 work_queue.add_action(action)?;
             }
-            Message::NowPlaying(_) => {}
+            Message::NowPlaying(info) => {
+                let _ = client.now_playing(&info).await;
+            }
         }
         Ok(Duration::from_secs(15))
     } else {
@@ -308,6 +311,14 @@ fn check_scrobble(start: Duration, cur: Duration, length: Duration) -> bool {
 }
 
 fn scrobble_info(song: &Song, start_time: Duration) -> Result<ScrobbleInfo, SongError> {
+    let song = song_info(song)?;
+    Ok(ScrobbleInfo {
+        song,
+        timestamp: start_time.as_secs().to_string(),
+    })
+}
+
+fn song_info(song: &Song) -> Result<SongInfo, SongError> {
     let title = song.title().ok_or(SongError::NoTitle)?.to_string();
     let artist = (!song.artists().is_empty())
         .then(|| song.artists().join(", "))
@@ -321,13 +332,12 @@ fn scrobble_info(song: &Song, start_time: Duration) -> Result<ScrobbleInfo, Song
         .get(&Tag::MusicBrainzRecordingId)
         .and_then(|t| t.first())
         .cloned();
-    Ok(ScrobbleInfo {
+    Ok(SongInfo {
         title,
         artist,
         album,
         album_artist,
         track_id,
-        start_time: start_time.as_secs().to_string(),
     })
 }
 
