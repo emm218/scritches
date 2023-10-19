@@ -238,7 +238,8 @@ impl Client {
 
         params.push_params(info);
 
-        self.method_call("track.scrobble", Some(params)).await?;
+        self.method_call::<JsonValue>("track.scrobble", Some(params))
+            .await?;
 
         Ok(())
     }

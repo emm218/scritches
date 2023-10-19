@@ -69,9 +69,7 @@ impl WorkQueue {
     }
 
     pub async fn do_work(&mut self, client: &mut LastFmClient) -> Result<(), Error> {
-        println!("scrobbling from queue: {} songs", self.scrobble_queue.len());
         while !self.scrobble_queue.is_empty() {
-            println!("batch");
             let range = ..min(4, self.scrobble_queue.len());
             let batch = &self.scrobble_queue.make_contiguous()[range];
             client.scrobble_many(batch).await?;
