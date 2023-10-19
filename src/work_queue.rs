@@ -35,11 +35,13 @@ pub enum CreateError {
 
 impl WorkQueue {
     pub fn new(path: &Path) -> Result<Self, CreateError> {
-        let f = File::open(path)?;
-        let (scrobble_queue, action_queue) = bincode::deserialize_from(f).unwrap_or_else(|e| {
-            eprintln!("unable to load queue file: {e}");
-            (VecDeque::new(), VecDeque::new())
-        });
+        let (scrobble_queue, action_queue) = match File::open(path) {
+            Ok(f) => bincode::deserialize_from(f).unwrap_or_else(|e| {
+                eprintln!("unable to read queue file: {e}");
+                (VecDeque::new(), VecDeque::new())
+            }),
+            Err(_) => (VecDeque::new(), VecDeque::new()),
+        };
 
         let queue_file = File::create(path)?;
 
