@@ -33,38 +33,39 @@ pub struct ScrobbleInfo {
     pub start_time: String,
 }
 
-//TODO: change these to a trait implementation on the params Vec type so we can do
-//params.push_params(info) instead of the awkward info.push_params(&mut params)
-//
-//tried to do this already but got caught up in lifetime annotation hell
-impl ScrobbleInfo {
-    pub fn push_params<'a>(&'a self, out: &mut Vec<(&str, &'a str)>) {
-        out.push(("title", &self.title));
-        out.push(("artist", &self.artist));
-        out.push(("timestamp", &self.start_time));
-        if let Some(album) = self.album.as_ref() {
-            out.push(("album", album));
+trait PushParams<'a, T> {
+    fn push_params(&mut self, info: &'a T);
+    fn push_params_idx(&mut self, info: &'a T, idx: usize);
+}
+
+impl<'a> PushParams<'a, ScrobbleInfo> for Vec<(&str, &'a str)> {
+    fn push_params(&mut self, info: &'a ScrobbleInfo) {
+        self.push(("title", &info.title));
+        self.push(("artist", &info.artist));
+        self.push(("timestamp", &info.start_time));
+        if let Some(album) = info.album.as_ref() {
+            self.push(("album", album));
         }
-        if let Some(album_artist) = self.album_artist.as_ref() {
-            out.push(("albumArtist", album_artist));
+        if let Some(album_artist) = info.album_artist.as_ref() {
+            self.push(("albumArtist", album_artist));
         }
-        if let Some(mbid) = self.track_id.as_ref() {
-            out.push(("mbid", mbid));
+        if let Some(mbid) = info.track_id.as_ref() {
+            self.push(("mbid", mbid));
         }
     }
 
-    pub fn push_params_idx<'a>(&'a self, idx: usize, out: &mut Vec<(&str, &'a str)>) {
-        out.push((&TITLE[idx], &self.title));
-        out.push((&ARTIST[idx], &self.artist));
-        out.push((&TIMESTAMP[idx], &self.start_time));
-        if let Some(album) = self.album.as_ref() {
-            out.push((&ALBUM[idx], album));
+    fn push_params_idx(&mut self, info: &'a ScrobbleInfo, idx: usize) {
+        self.push((&TITLE[idx], &info.title));
+        self.push((&ARTIST[idx], &info.artist));
+        self.push((&TIMESTAMP[idx], &info.start_time));
+        if let Some(album) = info.album.as_ref() {
+            self.push((&ALBUM[idx], album));
         }
-        if let Some(album_artist) = self.album_artist.as_ref() {
-            out.push((&ALBUMARTIST[idx], album_artist));
+        if let Some(album_artist) = info.album_artist.as_ref() {
+            self.push((&ALBUMARTIST[idx], album_artist));
         }
-        if let Some(mbid) = self.track_id.as_ref() {
-            out.push((&MBID[idx], mbid));
+        if let Some(mbid) = info.track_id.as_ref() {
+            self.push((&MBID[idx], mbid));
         }
     }
 }
@@ -140,7 +141,7 @@ impl Client {
     pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), Error> {
         let mut params = vec![("method", "track.scrobble"), ("api_key", API_KEY)];
 
-        info.push_params(&mut params);
+        params.push_params(info);
 
         Ok(())
     }
@@ -152,7 +153,7 @@ impl Client {
         let mut params = vec![("method", "track.scrobble"), ("api_key", API_KEY)];
 
         for (i, info) in infos.iter().enumerate() {
-            info.push_params_idx(i, &mut params);
+            params.push_params_idx(info, i);
         }
 
         Ok(())
