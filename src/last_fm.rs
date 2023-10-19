@@ -135,9 +135,18 @@ impl Client {
 
         let client = HttpClient::new();
 
-        let token = method_call::<Token>("auth.getToken", None, client).await?;
+        let token = method_call::<Token>("auth.getToken", None, &client).await?;
 
-        println!("{token:?}");
+        println!("{}", token.token);
+
+        let bla = method_call::<Token>(
+            "auth.getSession",
+            Some(vec![("token", &token.token[..])]),
+            &client,
+        )
+        .await?;
+
+        println!("{bla:?}");
 
         todo!();
 
@@ -192,7 +201,7 @@ fn sign<'a, 'b>(mut params: Vec<(&'a str, &'b str)>) -> SignedParams<'a, 'b> {
 pub async fn method_call<T>(
     method: &str,
     params: Option<Vec<(&str, &str)>>,
-    client: HttpClient,
+    client: &HttpClient,
 ) -> Result<T, Error>
 where
     T: DeserializeOwned,
@@ -203,7 +212,7 @@ where
             p.push(("api_key", API_KEY));
             p
         }
-        None => vec![("method", method), ("api_key", API_KEY), ("format", "json")],
+        None => vec![("method", method), ("api_key", API_KEY)],
     };
 
     let signed = sign(params);
@@ -211,7 +220,7 @@ where
         &signed
             .params
             .iter()
-            .chain(std::iter::once(&("api_sig", &signed.signature[..])))
+            .chain(vec![("api_sig", &signed.signature[..]), ("format", "json")].iter())
             .collect::<Vec<_>>(),
     );
     let response = request.send().await?.text().await?;
