@@ -33,6 +33,10 @@ pub struct ScrobbleInfo {
     pub start_time: String,
 }
 
+//TODO: change these to a trait implementation on the params Vec type so we can do
+//params.push_params(info) instead of the awkward info.push_params(&mut params)
+//
+//tried to do this already but got caught up in lifetime annotation hell
 impl ScrobbleInfo {
     pub fn push_params<'a>(&'a self, out: &mut Vec<(&str, &'a str)>) {
         out.push(("title", &self.title));
