@@ -1,11 +1,14 @@
 use std::{io, time::Duration};
 
 use md5::{Digest, Md5};
+use mpd_client::{
+    responses::{Song, SongInQueue},
+    tag::Tag,
+};
 use once_cell::sync::Lazy;
 use reqwest::Client as HttpClient;
 use serde::de::DeserializeOwned;
 use serde_derive::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use tokio::time::interval;
 
 static API_KEY: &str = "936df272ba862808520323da81f3fc6e";
@@ -26,6 +29,15 @@ static ALBUM: Lazy<[String; 50]> = with_indices!("album");
 static ALBUMARTIST: Lazy<[String; 50]> = with_indices!("albumArtist");
 static MBID: Lazy<[String; 50]> = with_indices!("mbid");
 static TIMESTAMP: Lazy<[String; 50]> = with_indices!("timestamp");
+static DURATION: Lazy<[String; 50]> = with_indices!("duration");
+
+#[derive(Debug, thiserror::Error)]
+pub enum SongError {
+    #[error("title is missing")]
+    NoTitle,
+    #[error("artist is missing")]
+    NoArtist,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SongInfo {
@@ -34,6 +46,44 @@ pub struct SongInfo {
     pub album: Option<String>,
     pub album_artist: Option<String>,
     pub track_id: Option<String>,
+    pub duration: Option<String>,
+}
+
+impl TryFrom<&Song> for SongInfo {
+    type Error = SongError;
+
+    fn try_from(song: &Song) -> Result<Self, Self::Error> {
+        let title = song.title().ok_or(Self::Error::NoTitle)?.to_string();
+        let artist = (!song.artists().is_empty())
+            .then(|| song.artists().join(", "))
+            .ok_or(Self::Error::NoArtist)?;
+        let album = song.album().map(ToString::to_string);
+        let album_artist = (!song.album_artists().is_empty())
+            .then(|| song.album_artists().join(", "))
+            .filter(|a| a.ne(&artist));
+        let track_id = song
+            .tags
+            .get(&Tag::MusicBrainzRecordingId)
+            .and_then(|t| t.first())
+            .cloned();
+        let duration = song.duration.map(|d| d.as_secs().to_string());
+        Ok(Self {
+            title,
+            artist,
+            album,
+            album_artist,
+            track_id,
+            duration,
+        })
+    }
+}
+
+impl TryFrom<&SongInQueue> for SongInfo {
+    type Error = SongError;
+
+    fn try_from(song: &SongInQueue) -> Result<Self, Self::Error> {
+        Self::try_from(&song.song)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,10 +92,44 @@ pub struct ScrobbleInfo {
     pub song: SongInfo,
 }
 
+impl ScrobbleInfo {
+    pub fn try_from<T>(s: T, start_time: Duration) -> Result<Self, SongError>
+    where
+        T: TryInto<SongInfo, Error = SongError>,
+    {
+        let song = s.try_into()?;
+
+        Ok(Self {
+            song,
+            timestamp: start_time.as_secs().to_string(),
+        })
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BasicInfo {
     pub title: String,
     pub artist: String,
+}
+
+impl TryFrom<&Song> for BasicInfo {
+    type Error = SongError;
+
+    fn try_from(song: &Song) -> Result<Self, Self::Error> {
+        let title = song.title().ok_or(Self::Error::NoTitle)?.to_string();
+        let artist = (!song.artists().is_empty())
+            .then(|| song.artists().join(", "))
+            .ok_or(Self::Error::NoArtist)?;
+        Ok(Self { title, artist })
+    }
+}
+
+impl TryFrom<&SongInQueue> for BasicInfo {
+    type Error = SongError;
+
+    fn try_from(song: &SongInQueue) -> Result<Self, Self::Error> {
+        Self::try_from(&song.song)
+    }
 }
 
 trait PushParams<'a, T> {
@@ -66,6 +150,9 @@ impl<'a> PushParams<'a, SongInfo> for Vec<(&str, &'a str)> {
         if let Some(mbid) = info.track_id.as_ref() {
             self.push(("mbid", mbid));
         }
+        if let Some(duration) = info.duration.as_ref() {
+            self.push(("duration", duration));
+        }
     }
 
     fn push_params_idx(&mut self, info: &'a SongInfo, idx: usize) {
@@ -79,6 +166,9 @@ impl<'a> PushParams<'a, SongInfo> for Vec<(&str, &'a str)> {
         }
         if let Some(mbid) = info.track_id.as_ref() {
             self.push((&MBID[idx], mbid));
+        }
+        if let Some(duration) = info.duration.as_ref() {
+            self.push((&DURATION[idx], duration));
         }
     }
 }
@@ -203,7 +293,7 @@ impl Client {
             {
                 Ok(Session { session }) => break Ok(session),
                 Err(Error::Api(ApiError { error: 14, .. })) => {
-                    println!("not authorized, retrying...")
+                    println!("not authorized, retrying...");
                 }
                 Err(e) => break Err(e),
             }

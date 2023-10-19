@@ -7,8 +7,7 @@ use clap::Parser;
 use mpd_client::{
     client::{ConnectWithPasswordError, Connection, ConnectionEvent, Subsystem},
     commands::{CurrentSong, ReadChannelMessages, Stats, Status, SubscribeToChannel},
-    responses::{Song, SongInQueue},
-    tag::Tag,
+    responses::SongInQueue,
     Client as MpdClient,
 };
 use tokio::{
@@ -19,7 +18,6 @@ use tokio::{
 
 use std::{
     cmp::min,
-    string::ToString,
     time::SystemTime,
     time::{Duration, UNIX_EPOCH},
 };
@@ -29,18 +27,10 @@ mod settings;
 mod work_queue;
 
 use crate::{
-    last_fm::{BasicInfo, Client as LastFmClient, Message, ScrobbleInfo, SongInfo},
+    last_fm::{Client as LastFmClient, Message, ScrobbleInfo},
     settings::Args,
     work_queue::{Error as WorkError, WorkQueue},
 };
-
-#[derive(Debug, thiserror::Error)]
-enum SongError {
-    #[error("title is missing")]
-    NoTitle,
-    #[error("artist is missing")]
-    NoArtist,
-}
 
 #[derive(Debug, thiserror::Error)]
 enum MsgHandleError {
@@ -104,6 +94,8 @@ async fn main() -> anyhow::Result<()> {
     //to finish but that will require some substantial architecture change
     //
     //look into how to check if a future is done and do different actions based on that
+    //
+    //edit: oh god its the revenge of polling
     let mut last_fm_client = LastFmClient::new().await?;
 
     if work_queue.has_work() {
@@ -190,7 +182,7 @@ async fn handle_player(
             if check_scrobble(start_playtime, cur_playtime, length)
                 && elapsed < Duration::from_secs(1)
             {
-                match scrobble_info(&song.song, start_time) {
+                match ScrobbleInfo::try_from(&song.song, start_time) {
                     Err(e) => eprintln!("can't scrobble song: {e}"),
                     Ok(info) => tx.send(Message::Scrobble(info)).await?,
                 }
@@ -207,13 +199,13 @@ async fn handle_player(
 
         (old, new) => {
             if check_scrobble(start_playtime, cur_playtime, length) && let Some(song) = old {
-                    match scrobble_info(&song.song, start_time) {
+                    match ScrobbleInfo::try_from(&song.song, start_time) {
                         Err(e) => eprintln!("can't scrobble song: {e}"),
                         Ok(info) => tx.send(Message::Scrobble(info)).await?,
                     }
                 }
             let new_song = client.command(CurrentSong).await?;
-            if let Some(Ok(info)) = new_song.as_ref().map(|s| song_info(&s.song)) {
+            if let Some(Ok(info)) = new_song.as_ref().map(TryInto::try_into) {
                 tx.send(Message::NowPlaying(info)).await?;
             }
             Ok((
@@ -231,7 +223,7 @@ async fn handle_mpd_msg(
     tx: &mpsc::Sender<Message>,
     current_song: &SongInQueue,
 ) -> anyhow::Result<()> {
-    let info = basic_info(&current_song.song)?;
+    let info = current_song.try_into()?;
 
     let messages = client.command(ReadChannelMessages).await?;
 
@@ -308,43 +300,4 @@ async fn handle_async_msg(
 #[inline]
 fn check_scrobble(start: Duration, cur: Duration, length: Duration) -> bool {
     (cur - start) >= min(Duration::from_secs(240), length / 2) && length > Duration::from_secs(30)
-}
-
-fn scrobble_info(song: &Song, start_time: Duration) -> Result<ScrobbleInfo, SongError> {
-    let song = song_info(song)?;
-    Ok(ScrobbleInfo {
-        song,
-        timestamp: start_time.as_secs().to_string(),
-    })
-}
-
-fn song_info(song: &Song) -> Result<SongInfo, SongError> {
-    let title = song.title().ok_or(SongError::NoTitle)?.to_string();
-    let artist = (!song.artists().is_empty())
-        .then(|| song.artists().join(", "))
-        .ok_or(SongError::NoArtist)?;
-    let album = song.album().map(ToString::to_string);
-    let album_artist = (!song.album_artists().is_empty())
-        .then(|| song.album_artists().join(", "))
-        .filter(|a| a.ne(&artist));
-    let track_id = song
-        .tags
-        .get(&Tag::MusicBrainzRecordingId)
-        .and_then(|t| t.first())
-        .cloned();
-    Ok(SongInfo {
-        title,
-        artist,
-        album,
-        album_artist,
-        track_id,
-    })
-}
-
-fn basic_info(song: &Song) -> Result<BasicInfo, SongError> {
-    let title = song.title().ok_or(SongError::NoTitle)?.to_string();
-    let artist = (!song.artists().is_empty())
-        .then(|| song.artists().join(", "))
-        .ok_or(SongError::NoArtist)?;
-    Ok(BasicInfo { title, artist })
 }
