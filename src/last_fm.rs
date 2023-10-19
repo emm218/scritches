@@ -1,5 +1,3 @@
-use std::iter::once;
-
 use md5::{Digest, Md5};
 use once_cell::sync::Lazy;
 use serde_derive::{Deserialize, Serialize};
@@ -23,7 +21,7 @@ static ALBUMARTIST: Lazy<[String; 50]> = with_indices!("albumArtist");
 static MBID: Lazy<[String; 50]> = with_indices!("mbid");
 static TIMESTAMP: Lazy<[String; 50]> = with_indices!("timestamp");
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScrobbleInfo {
     pub title: String,
     pub artist: String,
@@ -34,32 +32,36 @@ pub struct ScrobbleInfo {
 }
 
 impl ScrobbleInfo {
-    pub fn push_params<'a>(&'a self, out: &mut Vec<(&str, &'a str)>) {
-        out.push(("title", &self.title));
-        out.push(("artist", &self.artist));
-        out.push(("timestamp", &self.start_time));
-        if let Some(album) = self.album.as_ref() {
+    pub fn push_params(&self, out: &mut Vec<(&str, String)>) {
+        let clone = self.clone();
+
+        out.push(("title", clone.title));
+        out.push(("artist", clone.artist));
+        out.push(("timestamp", clone.start_time));
+        if let Some(album) = clone.album {
             out.push(("album", album));
         }
-        if let Some(album_artist) = self.album_artist.as_ref() {
+        if let Some(album_artist) = clone.album_artist {
             out.push(("albumArtist", album_artist));
         }
-        if let Some(mbid) = self.track_id.as_ref() {
+        if let Some(mbid) = clone.track_id {
             out.push(("mbid", mbid));
         }
     }
 
-    pub fn push_params_idx<'a>(&'a self, idx: usize, out: &mut Vec<(&str, &'a str)>) {
-        out.push((&TITLE[idx], &self.title));
-        out.push((&ARTIST[idx], &self.artist));
-        out.push((&TIMESTAMP[idx], &self.start_time));
-        if let Some(album) = self.album.as_ref() {
+    pub fn push_params_idx(&self, idx: usize, out: &mut Vec<(&str, String)>) {
+        let clone = self.clone();
+
+        out.push((&TITLE[idx], clone.title));
+        out.push((&ARTIST[idx], clone.artist));
+        out.push((&TIMESTAMP[idx], clone.start_time));
+        if let Some(album) = clone.album {
             out.push((&ALBUM[idx], album));
         }
-        if let Some(album_artist) = self.album_artist.as_ref() {
+        if let Some(album_artist) = clone.album_artist {
             out.push((&ALBUMARTIST[idx], album_artist));
         }
-        if let Some(mbid) = self.track_id.as_ref() {
+        if let Some(mbid) = clone.track_id {
             out.push((&MBID[idx], mbid));
         }
     }
@@ -111,11 +113,13 @@ impl Client {
     }
 
     pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), Error> {
-        let mut params = vec![("method", "track.scrobble"), ("api_key", API_KEY)];
+        let mut params = vec![
+            ("method", "track.scrobble".into()),
+            ("api_key", API_KEY.into()),
+        ];
 
         info.push_params(&mut params);
 
-        println!("{}", method_call(&params)?);
         Ok(())
     }
 
@@ -123,23 +127,24 @@ impl Client {
         if infos.len() > 50 {
             return Err(Error::TooManyScrobbles(infos.len()));
         }
-        let mut params = vec![("method", "track.scrobble"), ("api_key", API_KEY)];
+        let mut params = vec![
+            ("method", "track.scrobble".into()),
+            ("api_key", API_KEY.into()),
+        ];
 
         for (i, info) in infos.iter().enumerate() {
             info.push_params_idx(i, &mut params);
         }
 
-        println!("{}", method_call(&params)?);
         Ok(())
     }
 }
 
-fn method_call(params: &[(&str, &str)]) -> Result<String, Error> {
-    let mut sorted_params = params.iter().collect::<Vec<_>>();
-    sorted_params.sort_unstable();
+fn sign(mut params: Vec<(&str, String)>) -> Vec<(&str, String)> {
+    params.sort_unstable();
 
     let mut hasher = Md5::new();
-    for (k, v) in sorted_params {
+    for (k, v) in &params[..] {
         hasher.update(k);
         hasher.update(v);
     }
@@ -147,10 +152,6 @@ fn method_call(params: &[(&str, &str)]) -> Result<String, Error> {
 
     let signature = hex::encode(&hasher.finalize()[..]);
 
-    Ok(serde_urlencoded::to_string(
-        params
-            .iter()
-            .chain(once(&("api_sig", &signature[..])))
-            .collect::<Vec<_>>(),
-    )?)
+    params.push(("api_sig", signature));
+    params
 }
