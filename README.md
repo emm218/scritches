@@ -42,3 +42,5 @@ restarting a song over and over. I don't know why you'd do that though.
 
 - persist session key so user doesn't have to reauthenticate every time the
   scrobbler starts
+- allow scrobbles to be added to the queue while the client is authenticating
+- better logging
