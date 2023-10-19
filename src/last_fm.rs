@@ -1,8 +1,8 @@
 use md5::{Digest, Md5};
 use once_cell::sync::Lazy;
 use reqwest::Client as HttpClient;
+use serde::de::DeserializeOwned;
 use serde_derive::{Deserialize, Serialize};
-use serde_urlencoded::ser::Error as SerializeError;
 
 static API_KEY: &str = "936df272ba862808520323da81f3fc6e";
 static API_SECRET: &str = "d401bc1f1a702af8e6bd8c50bce9b11d";
@@ -105,13 +105,20 @@ pub enum Error {
     TooManyScrobbles(usize),
 
     #[error(transparent)]
-    Serialize(#[from] SerializeError),
-
-    #[error(transparent)]
     Http(#[from] reqwest::Error),
 
-    #[error("api error {code}: {msg}")]
-    ApiError { code: u32, msg: String },
+    #[error(transparent)]
+    Api(#[from] ApiError),
+
+    #[error("error deserializing response: {0}")]
+    Ser(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Deserialize, thiserror::Error)]
+#[error("api error {error}: {message}")]
+pub struct ApiError {
+    error: u32,
+    message: String,
 }
 
 pub struct Client {
@@ -121,14 +128,16 @@ pub struct Client {
 
 impl Client {
     pub async fn new() -> Result<Self, Error> {
+        #[derive(Debug, Deserialize)]
+        struct Token {
+            token: String,
+        }
+
         let client = HttpClient::new();
 
-        let params = vec![("method", "auth.getToken"), ("api_key", API_KEY)];
+        let token = method_call::<Token>("auth.getToken", None, client).await?;
 
-        let response = method_call(params, client).await?;
-        let content = response.text().await?;
-
-        println!("{content}");
+        println!("{token:?}");
 
         todo!();
 
@@ -139,7 +148,7 @@ impl Client {
     }
 
     pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), Error> {
-        let mut params = vec![("method", "track.scrobble"), ("api_key", API_KEY)];
+        let mut params = Vec::new();
 
         params.push_params(info);
 
@@ -150,7 +159,7 @@ impl Client {
         if infos.len() > 50 {
             return Err(Error::TooManyScrobbles(infos.len()));
         }
-        let mut params = vec![("method", "track.scrobble"), ("api_key", API_KEY)];
+        let mut params = Vec::new();
 
         for (i, info) in infos.iter().enumerate() {
             params.push_params_idx(info, i);
@@ -180,20 +189,36 @@ fn sign<'a, 'b>(mut params: Vec<(&'a str, &'b str)>) -> SignedParams<'a, 'b> {
     SignedParams { params, signature }
 }
 
-async fn method_call(
-    params: Vec<(&str, &str)>,
+pub async fn method_call<T>(
+    method: &str,
+    params: Option<Vec<(&str, &str)>>,
     client: HttpClient,
-) -> reqwest::Result<reqwest::Response> {
+) -> Result<T, Error>
+where
+    T: DeserializeOwned,
+{
+    let params = match params {
+        Some(mut p) => {
+            p.push(("method", method));
+            p.push(("api_key", API_KEY));
+            p
+        }
+        None => vec![("method", method), ("api_key", API_KEY), ("format", "json")],
+    };
+
     let signed = sign(params);
-    client
-        .post(API_URL)
-        .form(
-            &signed
-                .params
-                .iter()
-                .chain(std::iter::once(&("api_sig", &signed.signature[..])))
-                .collect::<Vec<_>>(),
-        )
-        .send()
-        .await
+    let request = client.post(API_URL).form(
+        &signed
+            .params
+            .iter()
+            .chain(std::iter::once(&("api_sig", &signed.signature[..])))
+            .collect::<Vec<_>>(),
+    );
+    let response = request.send().await?.text().await?;
+
+    if let Ok(e) = serde_json::from_str::<ApiError>(&response) {
+        return Err(e.into());
+    }
+
+    Ok(serde_json::from_str(&response)?)
 }
