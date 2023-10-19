@@ -1,8 +1,12 @@
+use std::{io, time::Duration};
+
 use md5::{Digest, Md5};
 use once_cell::sync::Lazy;
 use reqwest::Client as HttpClient;
 use serde::de::DeserializeOwned;
 use serde_derive::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use tokio::time::interval;
 
 static API_KEY: &str = "936df272ba862808520323da81f3fc6e";
 static API_SECRET: &str = "d401bc1f1a702af8e6bd8c50bce9b11d";
@@ -112,6 +116,9 @@ pub enum Error {
 
     #[error("error deserializing response: {0}")]
     Ser(#[from] serde_json::Error),
+
+    #[error("couldn't open browser for authentication: {0}")]
+    Open(#[from] io::Error),
 }
 
 #[derive(Debug, Deserialize, thiserror::Error)]
@@ -122,7 +129,7 @@ pub struct ApiError {
 }
 
 pub struct Client {
-    session_key: Option<String>,
+    session_key: String,
     client: HttpClient,
 }
 
@@ -133,33 +140,105 @@ impl Client {
             token: String,
         }
 
+        #[derive(Debug, Deserialize)]
+        struct SessionInner {
+            name: String,
+            key: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct Session {
+            session: SessionInner,
+        }
+
         let client = HttpClient::new();
 
-        let token = method_call::<Token>("auth.getToken", None, &client).await?;
+        let token = unauth_method_call::<Token>("auth.getToken", None, &client)
+            .await?
+            .token;
 
-        println!("{}", token.token);
+        println!("token: {token}");
 
-        let bla = method_call::<Token>(
-            "auth.getSession",
-            Some(vec![("token", &token.token[..])]),
-            &client,
-        )
-        .await?;
+        let url = format!("{}?api_key={}&token={}", AUTH_URL, API_KEY, token);
 
-        println!("{bla:?}");
+        open::that(url)?;
 
-        todo!();
+        let mut retry = interval(Duration::from_secs(10));
+
+        let session = loop {
+            retry.tick().await;
+            match unauth_method_call::<Session>(
+                "auth.getSession",
+                Some(vec![("token", &token[..])]),
+                &client,
+            )
+            .await
+            {
+                Ok(Session { session }) => break Ok(session),
+                Err(Error::Api(ApiError { error: 14, .. })) => {
+                    println!("not authorized, retrying...")
+                }
+                Err(e) => break Err(e),
+            }
+        }?;
+
+        println!("authenticated user {}", session.name);
+
+        let session_key = session.key;
+
+        println!("sk: {session_key}");
 
         Ok(Self {
-            session_key: None,
+            session_key,
             client,
         })
+    }
+
+    async fn method_call<T>(
+        &self,
+        method: &str,
+        args: Option<Vec<(&str, &str)>>,
+    ) -> Result<T, Error>
+    where
+        T: DeserializeOwned,
+    {
+        let mut params = vec![
+            ("method", method),
+            ("api_key", API_KEY),
+            ("sk", &self.session_key),
+        ];
+
+        if let Some(mut a) = args {
+            params.append(&mut a);
+        }
+
+        let client = &self.client;
+
+        let signed = sign(params);
+        let request = client.post(API_URL).form(
+            &signed
+                .params
+                .iter()
+                .chain(vec![("api_sig", &signed.signature[..]), ("format", "json")].iter())
+                .collect::<Vec<_>>(),
+        );
+        let response = request.send().await?.text().await?;
+
+        println!("{response}");
+
+        if let Ok(e) = serde_json::from_str::<ApiError>(&response) {
+            return Err(e.into());
+        }
+
+        Ok(serde_json::from_str(&response)?)
     }
 
     pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), Error> {
         let mut params = Vec::new();
 
         params.push_params(info);
+
+        self.method_call("track.scrobble", Some(params)).await?;
 
         Ok(())
     }
@@ -168,11 +247,11 @@ impl Client {
         if infos.len() > 50 {
             return Err(Error::TooManyScrobbles(infos.len()));
         }
-        let mut params = Vec::new();
+        /* let mut params = Vec::new();
 
         for (i, info) in infos.iter().enumerate() {
             params.push_params_idx(info, i);
-        }
+        } */
 
         Ok(())
     }
@@ -198,7 +277,7 @@ fn sign<'a, 'b>(mut params: Vec<(&'a str, &'b str)>) -> SignedParams<'a, 'b> {
     SignedParams { params, signature }
 }
 
-pub async fn method_call<T>(
+pub async fn unauth_method_call<T>(
     method: &str,
     params: Option<Vec<(&str, &str)>>,
     client: &HttpClient,
@@ -224,6 +303,8 @@ where
             .collect::<Vec<_>>(),
     );
     let response = request.send().await?.text().await?;
+
+    println!("{response}");
 
     if let Ok(e) = serde_json::from_str::<ApiError>(&response) {
         return Err(e.into());
