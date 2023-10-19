@@ -7,6 +7,7 @@ use serde_urlencoded::ser::Error as SerializeError;
 static API_KEY: &str = "936df272ba862808520323da81f3fc6e";
 static API_SECRET: &str = "d401bc1f1a702af8e6bd8c50bce9b11d";
 static API_URL: &str = "https://ws.audioscrobbler.com/2.0/";
+static AUTH_URL: &str = "https://www.last.fm/api/auth/";
 
 macro_rules! with_indices {
     ($l:literal) => {
@@ -22,7 +23,7 @@ static ALBUMARTIST: Lazy<[String; 50]> = with_indices!("albumArtist");
 static MBID: Lazy<[String; 50]> = with_indices!("mbid");
 static TIMESTAMP: Lazy<[String; 50]> = with_indices!("timestamp");
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ScrobbleInfo {
     pub title: String,
     pub artist: String,
@@ -33,42 +34,38 @@ pub struct ScrobbleInfo {
 }
 
 impl ScrobbleInfo {
-    pub fn push_params(&self, out: &mut Vec<(&str, String)>) {
-        let clone = self.clone();
-
-        out.push(("title", clone.title));
-        out.push(("artist", clone.artist));
-        out.push(("timestamp", clone.start_time));
-        if let Some(album) = clone.album {
+    pub fn push_params<'a>(&'a self, out: &mut Vec<(&str, &'a str)>) {
+        out.push(("title", &self.title));
+        out.push(("artist", &self.artist));
+        out.push(("timestamp", &self.start_time));
+        if let Some(album) = self.album.as_ref() {
             out.push(("album", album));
         }
-        if let Some(album_artist) = clone.album_artist {
+        if let Some(album_artist) = self.album_artist.as_ref() {
             out.push(("albumArtist", album_artist));
         }
-        if let Some(mbid) = clone.track_id {
+        if let Some(mbid) = self.track_id.as_ref() {
             out.push(("mbid", mbid));
         }
     }
 
-    pub fn push_params_idx(&self, idx: usize, out: &mut Vec<(&str, String)>) {
-        let clone = self.clone();
-
-        out.push((&TITLE[idx], clone.title));
-        out.push((&ARTIST[idx], clone.artist));
-        out.push((&TIMESTAMP[idx], clone.start_time));
-        if let Some(album) = clone.album {
+    pub fn push_params_idx<'a>(&'a self, idx: usize, out: &mut Vec<(&str, &'a str)>) {
+        out.push((&TITLE[idx], &self.title));
+        out.push((&ARTIST[idx], &self.artist));
+        out.push((&TIMESTAMP[idx], &self.start_time));
+        if let Some(album) = self.album.as_ref() {
             out.push((&ALBUM[idx], album));
         }
-        if let Some(album_artist) = clone.album_artist {
+        if let Some(album_artist) = self.album_artist.as_ref() {
             out.push((&ALBUMARTIST[idx], album_artist));
         }
-        if let Some(mbid) = clone.track_id {
+        if let Some(mbid) = self.track_id.as_ref() {
             out.push((&MBID[idx], mbid));
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BasicInfo {
     pub title: String,
     pub artist: String,
@@ -99,14 +96,17 @@ impl Message {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("too many scrobbles in batch. maximum is 50 got {0}")]
+    TooManyScrobbles(usize),
+
     #[error(transparent)]
     Serialize(#[from] SerializeError),
 
     #[error(transparent)]
     Http(#[from] reqwest::Error),
 
-    #[error("too many scrobbles in batch. maximum is 50 got {0}")]
-    TooManyScrobbles(usize),
+    #[error("api error {code}: {msg}")]
+    ApiError { code: u32, msg: String },
 }
 
 pub struct Client {
@@ -118,12 +118,9 @@ impl Client {
     pub async fn new() -> Result<Self, Error> {
         let client = HttpClient::new();
 
-        let params = sign(vec![
-            ("method", "auth.getToken".into()),
-            ("api_key", API_KEY.into()),
-        ]);
+        let params = vec![("method", "auth.getToken"), ("api_key", API_KEY)];
 
-        let response = client.post(API_URL).form(&params).send().await?;
+        let response = method_call(params, client).await?;
         let content = response.text().await?;
 
         println!("{content}");
@@ -137,10 +134,7 @@ impl Client {
     }
 
     pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), Error> {
-        let mut params = vec![
-            ("method", "track.scrobble".into()),
-            ("api_key", API_KEY.into()),
-        ];
+        let mut params = vec![("method", "track.scrobble"), ("api_key", API_KEY)];
 
         info.push_params(&mut params);
 
@@ -151,10 +145,7 @@ impl Client {
         if infos.len() > 50 {
             return Err(Error::TooManyScrobbles(infos.len()));
         }
-        let mut params = vec![
-            ("method", "track.scrobble".into()),
-            ("api_key", API_KEY.into()),
-        ];
+        let mut params = vec![("method", "track.scrobble"), ("api_key", API_KEY)];
 
         for (i, info) in infos.iter().enumerate() {
             info.push_params_idx(i, &mut params);
@@ -164,7 +155,12 @@ impl Client {
     }
 }
 
-fn sign(mut params: Vec<(&str, String)>) -> Vec<(&str, String)> {
+struct SignedParams<'a, 'b> {
+    params: Vec<(&'a str, &'b str)>,
+    signature: String,
+}
+
+fn sign<'a, 'b>(mut params: Vec<(&'a str, &'b str)>) -> SignedParams<'a, 'b> {
     params.sort_unstable();
 
     let mut hasher = Md5::new();
@@ -176,6 +172,23 @@ fn sign(mut params: Vec<(&str, String)>) -> Vec<(&str, String)> {
 
     let signature = hex::encode(&hasher.finalize()[..]);
 
-    params.push(("api_sig", signature));
-    params
+    SignedParams { params, signature }
+}
+
+async fn method_call(
+    params: Vec<(&str, &str)>,
+    client: HttpClient,
+) -> reqwest::Result<reqwest::Response> {
+    let signed = sign(params);
+    client
+        .post(API_URL)
+        .form(
+            &signed
+                .params
+                .iter()
+                .chain(std::iter::once(&("api_sig", &signed.signature[..])))
+                .collect::<Vec<_>>(),
+        )
+        .send()
+        .await
 }
