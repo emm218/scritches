@@ -19,12 +19,22 @@ pub struct WorkQueue {
 pub enum Error {
     #[error(transparent)]
     BinCode(#[from] bincode::Error),
+
     #[error(transparent)]
     LastFm(#[from] LastFmError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum CreateError {
+    #[error(transparent)]
+    Bincode(#[from] bincode::Error),
+
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
 impl WorkQueue {
-    pub fn new(path: &Path) -> io::Result<Self> {
+    pub fn new(path: &Path) -> Result<Self, CreateError> {
         let f = File::open(path)?;
         let (scrobble_queue, action_queue) = bincode::deserialize_from(f).unwrap_or_else(|e| {
             eprintln!("unable to load queue file: {e}");
@@ -33,11 +43,14 @@ impl WorkQueue {
 
         let queue_file = File::create(path)?;
 
-        Ok(Self {
+        let mut res = Self {
             scrobble_queue,
             action_queue,
             queue_file,
-        })
+        };
+
+        res.write()?;
+        Ok(res)
     }
 
     pub fn write(&mut self) -> bincode::Result<()> {

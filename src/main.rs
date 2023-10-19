@@ -102,9 +102,9 @@ async fn main() -> anyhow::Result<()> {
 
     //TODO: we should be able to start adding stuff to the work queue while waiting for this future
     //to finish but that will require some substantial architecture change
+    //
+    //look into how to check if a future is done and do different actions based on that
     let mut last_fm_client = LastFmClient::new().await?;
-    // write queue out immediately to avoid empty queue file
-    work_queue.write()?;
 
     if work_queue.has_work() {
         if let Err(WorkError::BinCode(e)) = work_queue.do_work(&mut last_fm_client).await {
