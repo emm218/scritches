@@ -201,22 +201,22 @@ impl<'a> PushParams<'a, ScrobbleInfo> for Vec<(&str, &'a str)> {
 pub enum Message {
     Scrobble(ScrobbleInfo),
     NowPlaying(SongInfo),
-    Action(Action),
+    TrackAction(Action, BasicInfo),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum Action {
-    LoveTrack(BasicInfo),
-    UnloveTrack(BasicInfo),
+    Love,
+    Unlove,
 }
 
 impl Message {
     pub fn love_track(info: BasicInfo) -> Self {
-        Message::Action(Action::LoveTrack(info))
+        Message::TrackAction(Action::Love, info)
     }
 
     pub fn unlove_track(info: BasicInfo) -> Self {
-        Message::Action(Action::UnloveTrack(info))
+        Message::TrackAction(Action::Unlove, info)
     }
 }
 
@@ -415,6 +415,17 @@ impl Client {
 
         self.void_method("track.updateNowPlaying", Some(params))
             .await
+    }
+
+    pub async fn do_track_action(&mut self, action: Action, info: &BasicInfo) -> Result<(), Error> {
+        let mut params = Vec::new();
+
+        params.push_params(info);
+
+        match action {
+            Action::Love => self.void_method("track.love", Some(params)).await,
+            Action::Unlove => self.void_method("track.unlove", Some(params)).await,
+        }
     }
 }
 

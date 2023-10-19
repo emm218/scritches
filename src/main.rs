@@ -260,13 +260,13 @@ async fn handle_async_msg(
             Some(msg) = r => {
                 match msg {
                     Message::Scrobble(info) => work_queue.add_scrobble(info)?,
-                    Message::Action(action) => work_queue.add_action(action)?,
-                    _ => { return Ok(retry_time); }
+                    Message::TrackAction(action, info) => work_queue.add_action(action, info)?,
+                    Message::NowPlaying(_) => { return Ok(retry_time); }
                 };
                 match work_queue.do_work(client).await {
                     Ok(_) => Ok(Duration::from_secs(15)),
+                    Err(WorkError::LastFm(_)) => Ok(retry_time),
                     Err(WorkError::BinCode(e)) => Err(e.into()),
-                    _ => Ok(retry_time),
                 }
             },
             () = t => match work_queue.do_work(client).await {
@@ -284,8 +284,11 @@ async fn handle_async_msg(
                     work_queue.add_scrobble(info)?;
                 }
             }
-            Message::Action(action) => {
-                work_queue.add_action(action)?;
+            Message::TrackAction(action, info) => {
+                if let Err(e) = client.do_track_action(action, &info).await {
+                    eprintln!("{e}");
+                    work_queue.add_action(action, info)?;
+                }
             }
             Message::NowPlaying(info) => {
                 let _ = client.now_playing(&info).await;
