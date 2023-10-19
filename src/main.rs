@@ -99,7 +99,10 @@ async fn main() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel(5);
 
     let mut work_queue = WorkQueue::new(&settings.queue_path)?;
-    let mut last_fm_client = LastFmClient::new();
+
+    //TODO: we should be able to start adding stuff to the work queue while waiting for this future
+    //to finish but that will require some substantial architecture change
+    let mut last_fm_client = LastFmClient::new().await?;
     // write queue out immediately to avoid empty queue file
     work_queue.write()?;
 

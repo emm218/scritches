@@ -1,5 +1,6 @@
 use md5::{Digest, Md5};
 use once_cell::sync::Lazy;
+use reqwest::Client as HttpClient;
 use serde_derive::{Deserialize, Serialize};
 use serde_urlencoded::ser::Error as SerializeError;
 
@@ -101,15 +102,38 @@ pub enum Error {
     #[error(transparent)]
     Serialize(#[from] SerializeError),
 
+    #[error(transparent)]
+    Http(#[from] reqwest::Error),
+
     #[error("too many scrobbles in batch. maximum is 50 got {0}")]
     TooManyScrobbles(usize),
 }
 
-pub struct Client(bool);
+pub struct Client {
+    session_key: Option<String>,
+    client: HttpClient,
+}
 
 impl Client {
-    pub fn new() -> Self {
-        Self(true)
+    pub async fn new() -> Result<Self, Error> {
+        let client = HttpClient::new();
+
+        let params = sign(vec![
+            ("method", "auth.getToken".into()),
+            ("api_key", API_KEY.into()),
+        ]);
+
+        let response = client.post(API_URL).form(&params).send().await?;
+        let content = response.text().await?;
+
+        println!("{content}");
+
+        todo!();
+
+        Ok(Self {
+            session_key: None,
+            client,
+        })
     }
 
     pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), Error> {
