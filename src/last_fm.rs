@@ -27,7 +27,6 @@ static TRACK: Lazy<[String; 50]> = with_indices!("track");
 static ARTIST: Lazy<[String; 50]> = with_indices!("artist");
 static ALBUM: Lazy<[String; 50]> = with_indices!("album");
 static ALBUMARTIST: Lazy<[String; 50]> = with_indices!("albumArtist");
-static MBID: Lazy<[String; 50]> = with_indices!("mbid");
 static TIMESTAMP: Lazy<[String; 50]> = with_indices!("timestamp");
 static DURATION: Lazy<[String; 50]> = with_indices!("duration");
 
@@ -45,7 +44,6 @@ pub struct SongInfo {
     pub artist: String,
     pub album: Option<String>,
     pub album_artist: Option<String>,
-    pub track_id: Option<String>,
     pub duration: Option<String>,
 }
 
@@ -61,18 +59,12 @@ impl TryFrom<&Song> for SongInfo {
         let album_artist = (!song.album_artists().is_empty())
             .then(|| song.album_artists().join(", "))
             .filter(|a| a.ne(&artist));
-        let track_id = song
-            .tags
-            .get(&Tag::MusicBrainzRecordingId)
-            .and_then(|t| t.first())
-            .cloned();
         let duration = song.duration.map(|d| d.as_secs().to_string());
         Ok(Self {
             title,
             artist,
             album,
             album_artist,
-            track_id,
             duration,
         })
     }
@@ -147,9 +139,6 @@ impl<'a> PushParams<'a, SongInfo> for Vec<(&str, &'a str)> {
         if let Some(album_artist) = info.album_artist.as_ref() {
             self.push(("albumArtist", album_artist));
         }
-        if let Some(mbid) = info.track_id.as_ref() {
-            self.push(("mbid", mbid));
-        }
         if let Some(duration) = info.duration.as_ref() {
             self.push(("duration", duration));
         }
@@ -163,9 +152,6 @@ impl<'a> PushParams<'a, SongInfo> for Vec<(&str, &'a str)> {
         }
         if let Some(album_artist) = info.album_artist.as_ref() {
             self.push((&ALBUMARTIST[idx], album_artist));
-        }
-        if let Some(mbid) = info.track_id.as_ref() {
-            self.push((&MBID[idx], mbid));
         }
         if let Some(duration) = info.duration.as_ref() {
             self.push((&DURATION[idx], duration));
