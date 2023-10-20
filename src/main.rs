@@ -182,7 +182,10 @@ async fn handle_player(
             if check_scrobble(start_playtime, cur_playtime, length)
                 && elapsed < Duration::from_secs(1)
             {
-                match ScrobbleInfo::try_from(&song.song, start_time) {
+                if let Ok(info) = song.try_into() {
+                    tx.send(Message::NowPlaying(info)).await?;
+                }
+                match ScrobbleInfo::try_from(song, start_time) {
                     Err(e) => eprintln!("can't scrobble song: {e}"),
                     Ok(info) => tx.send(Message::Scrobble(info)).await?,
                 }
