@@ -1,7 +1,7 @@
 # Scritches 🐱
 
 I have some problems with existing solutions for scrobbling my music to last.fm
-with MPD so I'm trying to roll my own.
+with [MPD](https://www.musicpd.org/) so I'm trying to roll my own.
 
 ## Features
 
