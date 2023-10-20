@@ -196,6 +196,15 @@ impl Client {
         })
     }
 
+    pub fn with_sk(session_key: String) -> Self {
+        let client = HttpClient::new();
+
+        Self {
+            session_key,
+            client,
+        }
+    }
+
     async fn authenticate(client: &HttpClient) -> Result<String, Error> {
         #[derive(Debug, Deserialize)]
         struct Token {

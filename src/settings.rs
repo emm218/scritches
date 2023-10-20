@@ -27,6 +27,10 @@ pub struct Args {
     #[arg(short, long)]
     queue: Option<PathBuf>,
 
+    /// Session key file
+    #[arg(short, long)]
+    sk: Option<PathBuf>,
+
     /// Maximum time between retries
     #[arg(short, long)]
     time: Option<u64>,
@@ -38,6 +42,7 @@ pub struct Settings {
     pub mpd_socket: Option<PathBuf>,
     pub mpd_password: Option<String>,
     pub queue_path: PathBuf,
+    pub sk_path: PathBuf,
     pub max_retry_time: u64,
 }
 
@@ -71,6 +76,13 @@ impl Settings {
                     .to_str()
                     .ok_or(Error::QueuePath)?,
             )?
+            .set_default(
+                "sk_path",
+                xdg_dirs
+                    .place_state_file("sk")?
+                    .to_str()
+                    .ok_or(Error::QueuePath)?,
+            )?
             .set_default("max_retry_time", 960)?;
 
         if let Some(addr) = args.addr {
@@ -88,6 +100,11 @@ impl Settings {
         if let Some(queue_path) = args.queue {
             config_builder = config_builder
                 .set_override("queue_path", queue_path.to_str().ok_or(Error::QueuePath)?)?;
+        }
+
+        if let Some(sk_path) = args.sk {
+            config_builder = config_builder
+                .set_override("sk_path", sk_path.to_str().ok_or(Error::QueuePath)?)?;
         }
 
         if let Some(time) = args.time {
