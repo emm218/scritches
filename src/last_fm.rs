@@ -30,6 +30,11 @@ static ALBUMARTIST: Lazy<[String; 50]> = with_indices!("albumArtist");
 static TIMESTAMP: Lazy<[String; 50]> = with_indices!("timestamp");
 static DURATION: Lazy<[String; 50]> = with_indices!("duration");
 
+trait PushParams<'a, T> {
+    fn push_params(&mut self, info: &'a T);
+    fn push_params_idx(&mut self, info: &'a T, idx: usize);
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SongError {
     #[error("title is missing")]
@@ -78,57 +83,6 @@ impl TryFrom<&SongInQueue> for SongInfo {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ScrobbleInfo {
-    pub timestamp: String,
-    pub song: SongInfo,
-}
-
-impl ScrobbleInfo {
-    pub fn try_from<T>(s: T, start_time: Duration) -> Result<Self, SongError>
-    where
-        T: TryInto<SongInfo, Error = SongError>,
-    {
-        let song = s.try_into()?;
-
-        Ok(Self {
-            song,
-            timestamp: start_time.as_secs().to_string(),
-        })
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BasicInfo {
-    pub title: String,
-    pub artist: String,
-}
-
-impl TryFrom<&Song> for BasicInfo {
-    type Error = SongError;
-
-    fn try_from(song: &Song) -> Result<Self, Self::Error> {
-        let title = song.title().ok_or(Self::Error::NoTitle)?.to_string();
-        let artist = (!song.artists().is_empty())
-            .then(|| song.artists().join(", "))
-            .ok_or(Self::Error::NoArtist)?;
-        Ok(Self { title, artist })
-    }
-}
-
-impl TryFrom<&SongInQueue> for BasicInfo {
-    type Error = SongError;
-
-    fn try_from(song: &SongInQueue) -> Result<Self, Self::Error> {
-        Self::try_from(&song.song)
-    }
-}
-
-trait PushParams<'a, T> {
-    fn push_params(&mut self, info: &'a T);
-    fn push_params_idx(&mut self, info: &'a T, idx: usize);
-}
-
 impl<'a> PushParams<'a, SongInfo> for Vec<(&str, &'a str)> {
     fn push_params(&mut self, info: &'a SongInfo) {
         self.push(("track", &info.title));
@@ -159,15 +113,24 @@ impl<'a> PushParams<'a, SongInfo> for Vec<(&str, &'a str)> {
     }
 }
 
-impl<'a> PushParams<'a, BasicInfo> for Vec<(&str, &'a str)> {
-    fn push_params(&mut self, info: &'a BasicInfo) {
-        self.push(("track", &info.title));
-        self.push(("artist", &info.artist));
-    }
+//TODO: I think there's a way to get rid of this type which would make SEVERAL things easier
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ScrobbleInfo {
+    pub timestamp: String,
+    pub song: SongInfo,
+}
 
-    fn push_params_idx(&mut self, info: &'a BasicInfo, idx: usize) {
-        self.push((&TRACK[idx], &info.title));
-        self.push((&ARTIST[idx], &info.artist));
+impl ScrobbleInfo {
+    pub fn try_from<T>(s: T, start_time: Duration) -> Result<Self, SongError>
+    where
+        T: TryInto<SongInfo, Error = SongError>,
+    {
+        let song = s.try_into()?;
+
+        Ok(Self {
+            song,
+            timestamp: start_time.as_secs().to_string(),
+        })
     }
 }
 
@@ -184,16 +147,54 @@ impl<'a> PushParams<'a, ScrobbleInfo> for Vec<(&str, &'a str)> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Message {
-    Scrobble(ScrobbleInfo),
-    NowPlaying(SongInfo),
-    TrackAction(Action, BasicInfo),
+pub struct BasicInfo {
+    pub title: String,
+    pub artist: String,
+}
+
+impl TryFrom<&Song> for BasicInfo {
+    type Error = SongError;
+
+    fn try_from(song: &Song) -> Result<Self, Self::Error> {
+        let title = song.title().ok_or(Self::Error::NoTitle)?.to_string();
+        let artist = (!song.artists().is_empty())
+            .then(|| song.artists().join(", "))
+            .ok_or(Self::Error::NoArtist)?;
+        Ok(Self { title, artist })
+    }
+}
+
+impl TryFrom<&SongInQueue> for BasicInfo {
+    type Error = SongError;
+
+    fn try_from(song: &SongInQueue) -> Result<Self, Self::Error> {
+        Self::try_from(&song.song)
+    }
+}
+
+impl<'a> PushParams<'a, BasicInfo> for Vec<(&str, &'a str)> {
+    fn push_params(&mut self, info: &'a BasicInfo) {
+        self.push(("track", &info.title));
+        self.push(("artist", &info.artist));
+    }
+
+    fn push_params_idx(&mut self, info: &'a BasicInfo, idx: usize) {
+        self.push((&TRACK[idx], &info.title));
+        self.push((&ARTIST[idx], &info.artist));
+    }
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum Action {
     Love,
     Unlove,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Message {
+    Scrobble(ScrobbleInfo),
+    NowPlaying(SongInfo),
+    TrackAction(Action, BasicInfo),
 }
 
 impl Message {
@@ -238,6 +239,17 @@ pub struct Client {
 
 impl Client {
     pub async fn new() -> Result<Self, Error> {
+        let client = HttpClient::new();
+
+        let session_key = Self::authenticate(&client).await?;
+
+        Ok(Self {
+            session_key,
+            client,
+        })
+    }
+
+    async fn authenticate(client: &HttpClient) -> Result<String, Error> {
         #[derive(Debug, Deserialize)]
         struct Token {
             token: String,
@@ -254,9 +266,7 @@ impl Client {
             session: SessionInner,
         }
 
-        let client = HttpClient::new();
-
-        let token = unauth_method_call::<Token>("auth.getToken", None, &client)
+        let token = unauth_method_call::<Token>("auth.getToken", None, client)
             .await?
             .token;
 
@@ -264,16 +274,21 @@ impl Client {
 
         let url = format!("{}?api_key={}&token={}", AUTH_URL, API_KEY, token);
 
-        open::that(url)?;
+        println!(
+            "authorization page should open automatically, if not then go to {url} to authorize"
+        );
 
-        let mut retry = interval(Duration::from_secs(10));
+        let _ = open::that(url);
+
+        let mut retry = interval(Duration::from_secs(5));
+        retry.tick().await;
 
         let session = loop {
             retry.tick().await;
             match unauth_method_call::<Session>(
                 "auth.getSession",
                 Some(vec![("token", &token[..])]),
-                &client,
+                client,
             )
             .await
             {
@@ -285,16 +300,9 @@ impl Client {
             }
         }?;
 
-        println!("authenticated user {}", session.name);
+        println!("authorized for user {}", session.name);
 
-        let session_key = session.key;
-
-        println!("sk: {session_key}");
-
-        Ok(Self {
-            session_key,
-            client,
-        })
+        Ok(session.key)
     }
 
     async fn method_call<T>(
