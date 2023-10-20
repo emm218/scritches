@@ -1,10 +1,7 @@
 use std::{io, time::Duration};
 
 use md5::{Digest, Md5};
-use mpd_client::{
-    responses::{Song, SongInQueue},
-    tag::Tag,
-};
+use mpd_client::responses::{Song, SongInQueue};
 use once_cell::sync::Lazy;
 use reqwest::Client as HttpClient;
 use serde::de::DeserializeOwned;
@@ -113,39 +110,6 @@ impl<'a> PushParams<'a, SongInfo> for Vec<(&str, &'a str)> {
     }
 }
 
-//TODO: I think there's a way to get rid of this type which would make SEVERAL things easier
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ScrobbleInfo {
-    pub timestamp: String,
-    pub song: SongInfo,
-}
-
-impl ScrobbleInfo {
-    pub fn try_from<T>(s: T, start_time: Duration) -> Result<Self, SongError>
-    where
-        T: TryInto<SongInfo, Error = SongError>,
-    {
-        let song = s.try_into()?;
-
-        Ok(Self {
-            song,
-            timestamp: start_time.as_secs().to_string(),
-        })
-    }
-}
-
-impl<'a> PushParams<'a, ScrobbleInfo> for Vec<(&str, &'a str)> {
-    fn push_params(&mut self, info: &'a ScrobbleInfo) {
-        self.push(("timestamp", &info.timestamp));
-        self.push_params(&info.song);
-    }
-
-    fn push_params_idx(&mut self, info: &'a ScrobbleInfo, idx: usize) {
-        self.push((&TIMESTAMP[idx], &info.timestamp));
-        self.push_params_idx(&info.song, idx);
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BasicInfo {
     pub title: String,
@@ -188,23 +152,6 @@ impl<'a> PushParams<'a, BasicInfo> for Vec<(&str, &'a str)> {
 pub enum Action {
     Love,
     Unlove,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum Message {
-    Scrobble(ScrobbleInfo),
-    NowPlaying(SongInfo),
-    TrackAction(Action, BasicInfo),
-}
-
-impl Message {
-    pub fn love_track(info: BasicInfo) -> Self {
-        Message::TrackAction(Action::Love, info)
-    }
-
-    pub fn unlove_track(info: BasicInfo) -> Self {
-        Message::TrackAction(Action::Unlove, info)
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -305,7 +252,7 @@ impl Client {
         Ok(session.key)
     }
 
-    async fn method_call<T>(
+    /* async fn method_call<T>(
         &self,
         method: &str,
         args: Option<Vec<(&str, &str)>>,
@@ -342,7 +289,7 @@ impl Client {
         }
 
         Ok(serde_json::from_str(&response)?)
-    }
+    } */
 
     async fn void_method(
         &self,
@@ -380,24 +327,25 @@ impl Client {
         Ok(())
     }
 
-    pub async fn scrobble_one(&mut self, info: &ScrobbleInfo) -> Result<(), Error> {
+    pub async fn scrobble_one(&mut self, info: &SongInfo, timestamp: &str) -> Result<(), Error> {
         let mut params = Vec::new();
 
         params.push_params(info);
+        params.push(("timestamp", timestamp));
 
         self.void_method("track.scrobble", Some(params)).await
     }
 
-    pub async fn scrobble_many(&mut self, infos: &[ScrobbleInfo]) -> Result<(), Error> {
+    pub async fn scrobble_many(&mut self, infos: &[(SongInfo, String)]) -> Result<(), Error> {
         if infos.len() > 50 {
             return Err(Error::TooManyScrobbles(infos.len()));
         }
         let mut params = Vec::new();
 
-        infos
-            .iter()
-            .enumerate()
-            .for_each(|(i, info)| params.push_params_idx(info, i));
+        for (i, (info, timestamp)) in infos.iter().enumerate() {
+            params.push_params_idx(info, i);
+            params.push((&TIMESTAMP[i], timestamp));
+        }
 
         self.void_method("track.scrobble", Some(params)).await
     }

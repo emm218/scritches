@@ -4,12 +4,14 @@
 
 use anyhow::anyhow;
 use clap::Parser;
+use last_fm::{SongInfo, Action, BasicInfo};
 use mpd_client::{
     client::{ConnectWithPasswordError, Connection, ConnectionEvent, Subsystem},
     commands::{CurrentSong, ReadChannelMessages, Stats, Status, SubscribeToChannel},
     responses::SongInQueue,
     Client as MpdClient,
 };
+use serde_derive::{Deserialize, Serialize};
 use tokio::{
     net::{TcpStream, UnixStream},
     select,
@@ -27,7 +29,7 @@ mod settings;
 mod work_queue;
 
 use crate::{
-    last_fm::{Client as LastFmClient, Message, ScrobbleInfo},
+    last_fm::Client as LastFmClient,
     settings::Args,
     work_queue::{Error as WorkError, WorkQueue},
 };
@@ -40,6 +42,24 @@ enum MsgHandleError {
     #[error(transparent)]
     BinCode(#[from] bincode::Error),
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Message {
+    Scrobble(SongInfo, String),
+    NowPlaying(SongInfo),
+    TrackAction(Action, BasicInfo),
+}
+
+impl Message {
+    pub fn love_track(info: BasicInfo) -> Self {
+        Message::TrackAction(Action::Love, info)
+    }
+
+    pub fn unlove_track(info: BasicInfo) -> Self {
+        Message::TrackAction(Action::Unlove, info)
+    }
+}
+
 
 enum Connector {
     Tcp(TcpStream),
@@ -185,9 +205,12 @@ async fn handle_player(
                 if let Ok(info) = song.try_into() {
                     tx.send(Message::NowPlaying(info)).await?;
                 }
-                match ScrobbleInfo::try_from(song, start_time) {
+                match song.try_into() {
                     Err(e) => eprintln!("can't scrobble song: {e}"),
-                    Ok(info) => tx.send(Message::Scrobble(info)).await?,
+                    Ok(info) => {
+                        let timestamp = start_time.as_secs().to_string();
+                        tx.send(Message::Scrobble(info, timestamp)).await?;
+                    }
                 }
                 Ok((
                     length,
@@ -202,9 +225,12 @@ async fn handle_player(
 
         (old, new) => {
             if check_scrobble(start_playtime, cur_playtime, length) && let Some(song) = old {
-                    match ScrobbleInfo::try_from(&song.song, start_time) {
+                    match song.try_into() {
                         Err(e) => eprintln!("can't scrobble song: {e}"),
-                        Ok(info) => tx.send(Message::Scrobble(info)).await?,
+                        Ok(info) => { 
+                            let timestamp = start_time.as_secs().to_string(); 
+                            tx.send(Message::Scrobble(info, timestamp)).await?; 
+                        }
                     }
                 }
             let new_song = client.command(CurrentSong).await?;
@@ -262,7 +288,7 @@ async fn handle_async_msg(
         select! {
             Some(msg) = r => {
                 match msg {
-                    Message::Scrobble(info) => work_queue.add_scrobble(info)?,
+                    Message::Scrobble(info, timestamp) => work_queue.add_scrobble(info, timestamp)?,
                     Message::TrackAction(action, info) => work_queue.add_action(action, info)?,
                     Message::NowPlaying(_) => { return Ok(retry_time); }
                 };
@@ -281,10 +307,10 @@ async fn handle_async_msg(
         }
     } else if let Some(msg) = r.await {
         match msg {
-            Message::Scrobble(info) => {
-                if let Err(e) = client.scrobble_one(&info).await {
+            Message::Scrobble(info, timestamp) => {
+                if let Err(e) = client.scrobble_one(&info, &timestamp).await {
                     eprintln!("{e}");
-                    work_queue.add_scrobble(info)?;
+                    work_queue.add_scrobble(info, timestamp)?;
                 }
             }
             Message::TrackAction(action, info) => {

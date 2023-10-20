@@ -6,13 +6,11 @@ use std::{
     path::Path,
 };
 
-use crate::last_fm::{
-    Action, BasicInfo, Client as LastFmClient, Error as LastFmError, ScrobbleInfo,
-};
+use crate::last_fm::{Action, BasicInfo, Client as LastFmClient, Error as LastFmError, SongInfo};
 
 #[derive(Debug)]
 pub struct WorkQueue {
-    scrobble_queue: VecDeque<ScrobbleInfo>,
+    scrobble_queue: VecDeque<(SongInfo, String)>,
     action_queue: VecDeque<(Action, BasicInfo)>,
     queue_file: File,
 }
@@ -81,8 +79,8 @@ impl WorkQueue {
         Ok(())
     }
 
-    pub fn add_scrobble(&mut self, info: ScrobbleInfo) -> bincode::Result<()> {
-        self.scrobble_queue.push_back(info);
+    pub fn add_scrobble(&mut self, info: SongInfo, timestamp: String) -> bincode::Result<()> {
+        self.scrobble_queue.push_back((info, timestamp));
         self.write()
     }
 
