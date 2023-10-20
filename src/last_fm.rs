@@ -437,20 +437,17 @@ fn sign<'a, 'b>(mut params: Vec<(&'a str, &'b str)>) -> SignedParams<'a, 'b> {
 
 pub async fn unauth_method_call<T>(
     method: &str,
-    params: Option<Vec<(&str, &str)>>,
+    args: Option<Vec<(&str, &str)>>,
     client: &HttpClient,
 ) -> Result<T, Error>
 where
     T: DeserializeOwned,
 {
-    let params = match params {
-        Some(mut p) => {
-            p.push(("method", method));
-            p.push(("api_key", API_KEY));
-            p
-        }
-        None => vec![("method", method), ("api_key", API_KEY)],
-    };
+    let mut params = vec![("method", method), ("api_key", API_KEY)];
+
+    if let Some(mut a) = args {
+        params.append(&mut a);
+    }
 
     let signed = sign(params);
     let request = client.post(API_URL).form(
