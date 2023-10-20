@@ -4,7 +4,7 @@
 
 use anyhow::anyhow;
 use clap::Parser;
-use last_fm::{SongInfo, Action, BasicInfo};
+use last_fm::{Action, BasicInfo, SongInfo};
 use mpd_client::{
     client::{ConnectWithPasswordError, Connection, ConnectionEvent, Subsystem},
     commands::{CurrentSong, ReadChannelMessages, Stats, Status, SubscribeToChannel},
@@ -45,7 +45,7 @@ enum MsgHandleError {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Message {
+enum Message {
     Scrobble(SongInfo, String),
     NowPlaying(SongInfo),
     TrackAction(Action, BasicInfo),
@@ -60,7 +60,6 @@ impl Message {
         Message::TrackAction(Action::Unlove, info)
     }
 }
-
 
 enum Connector {
     Tcp(TcpStream),
@@ -231,9 +230,9 @@ async fn handle_player(
             if check_scrobble(start_playtime, cur_playtime, length) && let Some(song) = old {
                     match song.try_into() {
                         Err(e) => eprintln!("can't scrobble song: {e}"),
-                        Ok(info) => { 
-                            let timestamp = start_time.as_secs().to_string(); 
-                            tx.send(Message::Scrobble(info, timestamp)).await?; 
+                        Ok(info) => {
+                            let timestamp = start_time.as_secs().to_string();
+                            tx.send(Message::Scrobble(info, timestamp)).await?;
                         }
                     }
                 }
