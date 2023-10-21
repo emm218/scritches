@@ -109,28 +109,46 @@ async fn main() -> anyhow::Result<()> {
 
     let mut work_queue = WorkQueue::new(&settings.queue_path)?;
 
-    //TODO: we should be able to start adding stuff to the work queue while waiting for this future
-    //to finish but that will require some substantial architecture change
-    //
-    //look into how to check if a future is done and do different actions based on that
-    //
-    //edit: oh god its the revenge of polling
-    //
-    //plan: 2 loops in async task, 1 that selects on this future and receiving a message, breaking
-    //when this future is done, the other that acts as we currently have it
-    let mut last_fm_client = LastFmClient::new(settings.sk_path).await?;
-
-    if work_queue.has_work() {
-        if let Err(WorkError::BinCode(e)) = work_queue.do_work(&mut last_fm_client).await {
-            panic!("{e}");
-        };
-    }
+    let last_fm_client_future = LastFmClient::new(settings.sk_path);
 
     let max_retry_time = Duration::from_secs(settings.max_retry_time);
 
     //TODO: more graceful shutdown
     tokio::spawn(async move {
+        tokio::pin!(last_fm_client_future);
+
+        let mut current_song = None;
+
         let mut retry_time = Duration::from_secs(15);
+        let mut last_fm_client = match loop {
+            select! {
+                r = &mut last_fm_client_future => break r.map_err(Into::into),
+                Some(msg) = rx.recv() => {
+                    match msg {
+                        Message::Scrobble(info, timestamp) => work_queue.add_scrobble(info, timestamp),
+                        Message::TrackAction(action, info) => work_queue.add_action(action, info),
+                        Message::NowPlaying(info) => { current_song = Some(info); }
+                    };
+                }
+                else => break Err(MsgHandleError::ChannelClosed),
+            }
+        } {
+            Ok(client) => client,
+            Err(e) => {
+                error!("{e}");
+                return;
+            }
+        };
+
+        if let Some(info) = current_song {
+            if let Ok(()) = last_fm_client.now_playing(&info).await {
+                info!("updated now playing status successfully");
+            }
+        }
+
+        if work_queue.has_work() {
+            _ = work_queue.do_work(&mut last_fm_client).await;
+        }
 
         loop {
             retry_time = min(max_retry_time, retry_time);
