@@ -21,6 +21,7 @@ use tokio::{
 
 use std::{
     cmp::min,
+    path::Path,
     time::SystemTime,
     time::{Duration, UNIX_EPOCH},
 };
@@ -30,9 +31,9 @@ mod settings;
 mod work_queue;
 
 use crate::{
-    last_fm::Client as LastFmClient,
+    last_fm::{Client as LastFmClient, Error as LastFmError},
     settings::Args,
-    work_queue::{Error as WorkError, WorkQueue},
+    work_queue::WorkQueue,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -40,14 +41,27 @@ enum MsgHandleError {
     #[error("channel closed")]
     ChannelClosed,
 
+    /// unrecoverable API errors
     #[error(transparent)]
-    BinCode(#[from] bincode::Error),
+    LastFmFatal(LastFmError),
+
+    #[error(transparent)]
+    LastFmReauth(LastFmError),
+}
+
+impl From<LastFmError> for MsgHandleError {
+    fn from(e: LastFmError) -> Self {
+        match e {
+            LastFmError::ApiReauth(_, _) => Self::LastFmReauth(e),
+            _ => Self::LastFmFatal(e),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 enum Message {
     Scrobble(SongInfo, String),
-    NowPlaying(SongInfo),
+    NowPlaying(Option<SongInfo>),
     TrackAction(Action, BasicInfo),
 }
 
@@ -109,58 +123,29 @@ async fn main() -> anyhow::Result<()> {
 
     let mut work_queue = WorkQueue::new(&settings.queue_path)?;
 
-    let last_fm_client_future = LastFmClient::new(settings.sk_path);
-
     let max_retry_time = Duration::from_secs(settings.max_retry_time);
 
     //TODO: more graceful shutdown
     tokio::spawn(async move {
-        tokio::pin!(last_fm_client_future);
-
-        let mut current_song = None;
-
-        let mut retry_time = Duration::from_secs(15);
-        let mut last_fm_client = match loop {
-            select! {
-                r = &mut last_fm_client_future => break r.map_err(Into::into),
-                Some(msg) = rx.recv() => {
-                    match msg {
-                        Message::Scrobble(info, timestamp) => work_queue.add_scrobble(info, timestamp),
-                        Message::TrackAction(action, info) => work_queue.add_action(action, info),
-                        Message::NowPlaying(info) => { current_song = Some(info); }
-                    };
-                }
-                else => break Err(MsgHandleError::ChannelClosed),
-            }
-        } {
-            Ok(client) => client,
-            Err(e) => {
-                error!("{e}");
-                return;
-            }
-        };
-
-        if let Some(info) = current_song {
-            if let Ok(()) = last_fm_client.now_playing(&info).await {
-                info!("updated now playing status successfully");
-            }
-        }
-
-        if work_queue.has_work() {
-            _ = work_queue.do_work(&mut last_fm_client).await;
-        }
+        let mut prev_client = None;
+        let mut r;
 
         loop {
-            retry_time = min(max_retry_time, retry_time);
+            (prev_client, r) = scrobble_task(
+                &mut rx,
+                &mut work_queue,
+                prev_client,
+                &settings.sk_path,
+                max_retry_time,
+            )
+            .await;
 
-            retry_time =
-                match handle_async_msg(&mut rx, retry_time, &mut work_queue, &mut last_fm_client)
-                    .await
-                {
-                    Ok(t) => t,
-                    Err(MsgHandleError::ChannelClosed) => break,
-                    Err(MsgHandleError::BinCode(e)) => panic!("{e}"),
-                }
+            if let MsgHandleError::LastFmFatal(_) = r {
+                error!("unrecoverable error, shutting down");
+                break;
+            } else if let MsgHandleError::ChannelClosed = r {
+                break;
+            }
         }
     });
 
@@ -177,7 +162,7 @@ async fn main() -> anyhow::Result<()> {
     let mut start_time = SystemTime::now().duration_since(UNIX_EPOCH)?;
 
     if let Some(Ok(info)) = current_song.as_ref().map(TryInto::try_into) {
-        tx.send(Message::NowPlaying(info)).await?;
+        tx.send(Message::NowPlaying(Some(info))).await?;
     }
 
     loop {
@@ -228,7 +213,7 @@ async fn handle_player(
                 && elapsed < Duration::from_secs(1)
             {
                 if let Ok(info) = song.try_into() {
-                    tx.send(Message::NowPlaying(info)).await?;
+                    tx.send(Message::NowPlaying(Some(info))).await?;
                 }
                 match song.try_into() {
                     Err(e) => warn!("couldn't scrobble song: {e}"),
@@ -259,9 +244,13 @@ async fn handle_player(
                     }
                 }
             let new_song = client.command(CurrentSong).await?;
-            if let Some(Ok(info)) = new_song.as_ref().map(TryInto::try_into) {
-                tx.send(Message::NowPlaying(info)).await?;
+
+            match new_song.as_ref().map(TryInto::try_into) {
+                Some(Ok(info)) => tx.send(Message::NowPlaying(Some(info))).await?,
+                Some(Err(e)) => warn!("couldn't update now playing: {e}"),
+                None => tx.send(Message::NowPlaying(None)).await?,
             }
+
             Ok((
                 new.map_or(length, |s| s.1),
                 cur_playtime,
@@ -300,6 +289,69 @@ async fn handle_mpd_msg(
     Ok(())
 }
 
+async fn scrobble_task(
+    rx: &mut mpsc::Receiver<Message>,
+    work_queue: &mut WorkQueue,
+    prev_client: Option<LastFmClient>,
+    sk_path: &Path,
+    max_retry_time: Duration,
+) -> (Option<LastFmClient>, MsgHandleError) {
+    let client_future = LastFmClient::new(prev_client, sk_path);
+
+    tokio::pin!(client_future);
+
+    let mut current_song = None;
+
+    let mut retry_time = Duration::from_secs(15);
+    let mut client = match loop {
+        select! {
+            r = &mut client_future => break r.map_err(Into::into),
+            Some(msg) = rx.recv() => {
+                match msg {
+                    Message::Scrobble(info, timestamp) => work_queue.add_scrobble(info, timestamp),
+                    Message::TrackAction(action, info) => work_queue.add_action(action, info),
+                    Message::NowPlaying(info_opt) => {
+                        if let Some(info) = info_opt.as_ref() {
+                            info!("new song: {} - {}", info.artist, info.title);
+                        }
+                        current_song = info_opt;
+                    }
+                };
+            }
+            else => return (None, MsgHandleError::ChannelClosed),
+        }
+    } {
+        Ok(client) => client,
+        Err(e) => {
+            error!("{e}");
+            return (None, e);
+        }
+    };
+
+    if let Some(info) = current_song {
+        if let Ok(()) = client.now_playing(&info).await {
+            info!("updated now playing status successfully");
+        }
+    }
+
+    if work_queue.has_work() {
+        if let Err(e) = work_queue.do_work(&mut client).await {
+            if !e.is_retryable() {
+                return (Some(client), e.into());
+            }
+        }
+    }
+
+    loop {
+        retry_time = min(max_retry_time, retry_time);
+
+        retry_time = match handle_async_msg(rx, retry_time, work_queue, &mut client).await {
+            Ok(t) => t,
+            Err(e) => break (Some(client), e),
+        }
+    }
+}
+
 async fn handle_async_msg(
     rx: &mut mpsc::Receiver<Message>,
     retry_time: Duration,
@@ -313,20 +365,37 @@ async fn handle_async_msg(
         select! {
             Some(msg) = r => {
                 match msg {
-                    Message::Scrobble(info, timestamp) => work_queue.add_scrobble(info, timestamp)?,
-                    Message::TrackAction(action, info) => work_queue.add_action(action, info)?,
-                    Message::NowPlaying(_) => { return Ok(retry_time); }
+                    Message::Scrobble(info, timestamp) => work_queue.add_scrobble(info, timestamp),
+                    Message::TrackAction(action, info) => work_queue.add_action(action, info),
+                    Message::NowPlaying(info_opt) => {
+                        if let Some(info) = info_opt.as_ref() {
+                            info!("new song: {} - {}", info.artist, info.title);
+                        }
+                        work_queue.last_played = info_opt;
+
+                        // good heuristic for preventing calling do_work twice in quick succession
+                        //
+                        // we don't really care about retrying when now playing has changed without
+                        // any scrobbles
+                        return Ok(retry_time);
+                    }
                 };
                 match work_queue.do_work(client).await {
                     Ok(_) => Ok(Duration::from_secs(15)),
-                    Err(WorkError::LastFm(_)) => Ok(retry_time),
-                    Err(WorkError::BinCode(e)) => Err(e.into()),
+                    Err(e) => if e.is_retryable() {
+                        Ok(retry_time)
+                    } else {
+                        Err(e.into())
+                    }
                 }
             },
             () = t => match work_queue.do_work(client).await {
                     Ok(_) => Ok(Duration::from_secs(15)),
-                    Err(WorkError::LastFm(_)) => Ok(retry_time * 2),
-                    Err(WorkError::BinCode(e)) => Err(e.into()),
+                    Err(e) => if e.is_retryable() {
+                        Ok(retry_time * 2)
+                    } else {
+                        Err(e.into())
+                    }
                 },
             else => Err(MsgHandleError::ChannelClosed),
         }
@@ -335,25 +404,47 @@ async fn handle_async_msg(
             Message::Scrobble(info, timestamp) => {
                 info!("scrobbling {} - {}", info.artist, info.title);
                 if let Err(e) = client.scrobble_one(&info, &timestamp).await {
-                    warn!("scrobble failed: {e}");
-                    work_queue.add_scrobble(info, timestamp)?;
+                    work_queue.add_scrobble(info, timestamp);
+                    if e.is_retryable() {
+                        warn!("scrobble failed: {e}");
+                    } else {
+                        error!("scrobble failed: {e}");
+                        return Err(e.into());
+                    }
                 } else {
-                    info!("scrobbled successfully")
+                    info!("scrobbled successfully");
                 }
             }
             Message::TrackAction(action, info) => {
                 info!("{}ing {} - {}", action, info.artist, info.title);
                 if let Err(e) = client.do_track_action(action, &info).await {
-                    warn!("action failed: {e}");
-                    work_queue.add_action(action, info)?;
+                    work_queue.add_action(action, info);
+                    if e.is_retryable() {
+                        warn!("{action}e track failed: {e}");
+                    } else {
+                        error!("{action}e track failed: {e}");
+                        return Err(e.into());
+                    }
                 } else {
-                    info!("{}ed successfully", action);
+                    info!("{action}ed successfully");
                 }
             }
-            Message::NowPlaying(info) => {
-                if let Ok(()) = client.now_playing(&info).await {
-                    info!("updated now playing status successfully")
+            Message::NowPlaying(Some(info)) => {
+                info!("new song: {} - {}", info.artist, info.title);
+                if let Err(e) = client.now_playing(&info).await {
+                    work_queue.last_played = Some(info);
+                    if e.is_retryable() {
+                        warn!("updating now playing failed: {e}");
+                    } else {
+                        error!("updating now playing failed: {e}");
+                        return Err(e.into());
+                    }
+                } else {
+                    info!("updated now playing status successfully");
                 }
+            }
+            Message::NowPlaying(None) => {
+                work_queue.last_played = None;
             }
         }
         Ok(Duration::from_secs(15))

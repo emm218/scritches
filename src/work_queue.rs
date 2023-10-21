@@ -10,33 +10,16 @@ use log::{error, info, warn};
 
 use crate::last_fm::{Action, BasicInfo, Client as LastFmClient, Error as LastFmError, SongInfo};
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error(transparent)]
-    BinCode(#[from] bincode::Error),
-
-    #[error(transparent)]
-    LastFm(#[from] LastFmError),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum CreateError {
-    #[error(transparent)]
-    Bincode(#[from] bincode::Error),
-
-    #[error(transparent)]
-    Io(#[from] io::Error),
-}
-
 #[derive(Debug)]
 pub struct WorkQueue {
     scrobble_queue: VecDeque<(SongInfo, String)>,
     action_queue: VecDeque<(Action, BasicInfo)>,
     queue_file: File,
+    pub last_played: Option<SongInfo>,
 }
 
 impl WorkQueue {
-    pub fn new(path: &Path) -> Result<Self, CreateError> {
+    pub fn new(path: &Path) -> io::Result<Self> {
         let (scrobble_queue, action_queue) = match File::open(path) {
             Ok(f) => bincode::deserialize_from(f).unwrap_or_else(|e| {
                 warn!("unable to read queue file: {e}");
@@ -51,13 +34,20 @@ impl WorkQueue {
             scrobble_queue,
             action_queue,
             queue_file,
+            last_played: None,
         };
 
-        res.write()?;
+        res.write();
         Ok(res)
     }
 
-    pub fn write(&mut self) -> bincode::Result<()> {
+    fn write(&mut self) {
+        if let Err(e) = self.try_write() {
+            error!("failed to save work queue: {e}");
+        }
+    }
+
+    fn try_write(&mut self) -> bincode::Result<()> {
         self.queue_file.set_len(0)?;
         self.queue_file.rewind()?;
         bincode::serialize_into(
@@ -66,28 +56,60 @@ impl WorkQueue {
         )
     }
 
+    #[inline]
     pub fn has_work(&self) -> bool {
-        !(self.scrobble_queue.is_empty() && self.action_queue.is_empty())
+        !self.scrobble_queue.is_empty()
+            || !self.action_queue.is_empty()
+            || self.last_played.is_some()
     }
 
-    pub async fn do_work(&mut self, client: &mut LastFmClient) -> Result<(), Error> {
+    pub async fn do_work(&mut self, client: &mut LastFmClient) -> Result<(), LastFmError> {
+        let mut count = 0;
         while !self.scrobble_queue.is_empty() {
             let range = ..min(50, self.scrobble_queue.len());
             let batch = &self.scrobble_queue.make_contiguous()[range];
-            client.scrobble_many(batch).await?;
+            if let Err(e) = client.scrobble_many(batch).await {
+                self.write();
+                if e.is_retryable() {
+                    warn!("scrobbling queue failed: {e}");
+                } else {
+                    error!("scrobbling queue failed: {e}");
+                }
+                info!("succesfully scrobbled {count} songs from queue");
+                return Err(e);
+            }
+            count += range.end;
             self.scrobble_queue.drain(range);
         }
-        self.write()?;
+        info!("succesfully scrobbled {count} songs from queue");
+
+        while let Some((action, info)) = self.action_queue.front() {
+            if let Err(e) = client.do_track_action(*action, info).await {
+                error!("{action}e track failed: {e}");
+                self.write();
+                return Err(e);
+            }
+        }
+        self.write();
+
+        if let Some(info) = self.last_played.as_ref() {
+            client.now_playing(info).await?;
+            self.last_played = None;
+        }
+        info!("succesfully updated now playing status");
+
         Ok(())
     }
 
-    pub fn add_scrobble(&mut self, info: SongInfo, timestamp: String) -> bincode::Result<()> {
+    pub fn add_scrobble(&mut self, info: SongInfo, timestamp: String) {
+        info!("added scrobble {} - {} to queue", info.artist, info.title);
         self.scrobble_queue.push_back((info, timestamp));
-        self.write()
+        self.write();
     }
 
-    pub fn add_action(&mut self, action: Action, info: BasicInfo) -> bincode::Result<()> {
+    pub fn add_action(&mut self, action: Action, info: BasicInfo) {
+        info!("added {action}e {} - {} to queue", info.artist, info.title);
         self.action_queue.push_back((action, info));
-        self.write()
+        self.write();
     }
 }

@@ -1,10 +1,6 @@
-use std::{
-    fmt, fs, io,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{fmt, fs, path::Path, time::Duration};
 
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use md5::{Digest, Md5};
 use mpd_client::responses::{Song, SongInQueue};
 use once_cell::sync::Lazy;
@@ -168,6 +164,13 @@ impl fmt::Display for Action {
     }
 }
 
+#[derive(Debug, Deserialize, thiserror::Error)]
+#[error("{message} (error {error})")]
+pub struct ApiError {
+    error: u32,
+    message: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("too many scrobbles in batch. maximum is 50 got {0}")]
@@ -176,21 +179,34 @@ pub enum Error {
     #[error(transparent)]
     Http(#[from] reqwest::Error),
 
-    #[error(transparent)]
-    Api(#[from] ApiError),
+    #[error("{1} (error {0})")]
+    ApiRetry(u32, String),
+
+    #[error("{1} (error {0})")]
+    ApiReauth(u32, String),
+
+    #[error("{1} (error {0})")]
+    ApiFatal(u32, String),
 
     #[error("error deserializing response: {0}")]
     Ser(#[from] serde_json::Error),
-
-    #[error("couldn't open browser for authentication: {0}")]
-    Open(#[from] io::Error),
 }
 
-#[derive(Debug, Deserialize, thiserror::Error)]
-#[error("{message} (error {error})")]
-pub struct ApiError {
-    error: u32,
-    message: String,
+impl From<ApiError> for Error {
+    fn from(e: ApiError) -> Self {
+        match e.error {
+            11 | 16 | 29 => Self::ApiRetry(e.error, e.message),
+            14 | 15 | 9 => Self::ApiReauth(e.error, e.message),
+            _ => Self::ApiFatal(e.error, e.message),
+        }
+    }
+}
+
+impl Error {
+    #[inline]
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::Http(_) | Self::ApiRetry(_, _))
+    }
 }
 
 pub struct Client {
@@ -199,12 +215,18 @@ pub struct Client {
 }
 
 impl Client {
-    pub async fn new(sk_path: PathBuf) -> Result<Self, Error> {
+    // awful awful hack to deal with opaque future types, constructor can take a previous client to
+    // reauth it instead of actually creating a new one
+    pub async fn new(prev_client: Option<Self>, sk_path: &Path) -> Result<Self, Error> {
+        if let Some(prev_client) = prev_client {
+            return prev_client.re_auth(sk_path).await;
+        }
+
         let client = HttpClient::new();
 
-        let session_key = match Self::retrieve_sk(&sk_path) {
+        let session_key = match Self::retrieve_sk(sk_path) {
             Some(sk) => sk,
-            None => Self::authenticate(&client, &sk_path).await?,
+            None => Self::authenticate(&client, sk_path).await?,
         };
 
         Ok(Self {
@@ -223,6 +245,14 @@ impl Client {
             }
             Ok(sk) => Some(sk),
         }
+    }
+
+    async fn re_auth(mut self, sk_path: &Path) -> Result<Self, Error> {
+        let session_key = Self::authenticate(&self.client, sk_path).await?;
+
+        self.session_key = session_key;
+
+        Ok(self)
     }
 
     async fn authenticate(client: &HttpClient, path: &Path) -> Result<String, Error> {
@@ -250,11 +280,12 @@ impl Client {
 
         let url = format!("{}?api_key={}&token={}", AUTH_URL, API_KEY, token);
 
-        println!(
-            "authorization page should open automatically, if not then go to {url} to authorize"
-        );
+        println!("authorization page should open automatically");
 
-        let _ = open::that(url);
+        if let Err(e) = open::that(&url) {
+            warn!("couldn't open browser: {e}");
+            println!("go to {url} to authorize");
+        }
 
         let mut retry = interval(Duration::from_secs(5));
         retry.tick().await;
@@ -269,8 +300,12 @@ impl Client {
             .await
             {
                 Ok(Session { session }) => break Ok(session),
-                Err(Error::Api(ApiError { error: 14, .. })) => {
+                Err(Error::ApiReauth(14, _)) => {
                     trace!("not authorized, retrying...");
+                }
+                Err(Error::ApiReauth(15, msg)) => {
+                    warn!("token expired before authorization");
+                    break Err(Error::ApiReauth(15, msg));
                 }
                 Err(e) => break Err(e),
             }
