@@ -158,6 +158,10 @@ async fn main() -> anyhow::Result<()> {
 
     let mut start_time = SystemTime::now().duration_since(UNIX_EPOCH)?;
 
+    if let Some(Ok(info)) = current_song.as_ref().map(TryInto::try_into) {
+        tx.send(Message::NowPlaying(info)).await?;
+    }
+
     loop {
         match state_changes.next().await {
             Some(ConnectionEvent::SubsystemChange(Subsystem::Player)) => {
