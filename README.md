@@ -41,7 +41,6 @@ restarting a song over and over. I don't know why you'd do that though.
 ## Todo
 
 - persist session key in dbus secrets service if available
-- allow scrobbles to be added to the queue while the client is authenticating
 - more graceful shutdown and error handling behavior
   - program should never panic
   - not being able to persist queue shouldn't be fatal
