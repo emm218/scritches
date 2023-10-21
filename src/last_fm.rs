@@ -1,5 +1,6 @@
 use std::{io, time::Duration};
 
+use log::{debug, info, trace, warn};
 use md5::{Digest, Md5};
 use mpd_client::responses::{Song, SongInQueue};
 use once_cell::sync::Lazy;
@@ -154,6 +155,15 @@ pub enum Action {
     Unlove,
 }
 
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Love => write!(f, "lov"),
+            Self::Unlove => write!(f, "unlov"),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("too many scrobbles in batch. maximum is 50 got {0}")]
@@ -173,7 +183,7 @@ pub enum Error {
 }
 
 #[derive(Debug, Deserialize, thiserror::Error)]
-#[error("api error {error}: {message}")]
+#[error("{message} (error {error})")]
 pub struct ApiError {
     error: u32,
     message: String,
@@ -226,7 +236,7 @@ impl Client {
             .await?
             .token;
 
-        println!("token: {token}");
+        debug!("token: {token}");
 
         let url = format!("{}?api_key={}&token={}", AUTH_URL, API_KEY, token);
 
@@ -250,13 +260,16 @@ impl Client {
             {
                 Ok(Session { session }) => break Ok(session),
                 Err(Error::Api(ApiError { error: 14, .. })) => {
-                    println!("not authorized, retrying...");
+                    trace!("not authorized, retrying...");
                 }
                 Err(e) => break Err(e),
             }
         }?;
 
-        println!("authorized for user {}", session.name);
+        info!(
+            "session key {} authorized for user {}",
+            session.key, session.name
+        );
 
         Ok(session.key)
     }
@@ -327,8 +340,6 @@ impl Client {
         );
         let response = request.send().await?.text().await?;
 
-        println!("{response}");
-
         if let Ok(e) = serde_json::from_str::<ApiError>(&response) {
             return Err(e.into());
         }
@@ -337,6 +348,7 @@ impl Client {
     }
 
     pub async fn scrobble_one(&mut self, info: &SongInfo, timestamp: &str) -> Result<(), Error> {
+        trace!("scrobble:{info:#?} timestamp: {timestamp}");
         let mut params = Vec::new();
 
         params.push_params(info);
@@ -360,6 +372,7 @@ impl Client {
     }
 
     pub async fn now_playing(&mut self, info: &SongInfo) -> Result<(), Error> {
+        trace!("now_playing: {info:#?}");
         let mut params = Vec::new();
 
         params.push_params(info);
@@ -369,6 +382,7 @@ impl Client {
     }
 
     pub async fn do_track_action(&mut self, action: Action, info: &BasicInfo) -> Result<(), Error> {
+        trace!("do_track_action: {action:?} {info:#?}");
         let mut params = Vec::new();
 
         params.push_params(info);
@@ -423,8 +437,6 @@ where
             .collect::<Vec<_>>(),
     );
     let response = request.send().await?.text().await?;
-
-    println!("{response}");
 
     if let Ok(e) = serde_json::from_str::<ApiError>(&response) {
         return Err(e.into());

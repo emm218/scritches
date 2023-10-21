@@ -29,7 +29,7 @@ pub struct Args {
 
     /// Session key file
     #[arg(short, long)]
-    sk: Option<PathBuf>,
+    key: Option<PathBuf>,
 
     /// Maximum time between retries
     #[arg(short, long)]
@@ -102,7 +102,7 @@ impl Settings {
                 .set_override("queue_path", queue_path.to_str().ok_or(Error::QueuePath)?)?;
         }
 
-        if let Some(sk_path) = args.sk {
+        if let Some(sk_path) = args.key {
             config_builder = config_builder
                 .set_override("sk_path", sk_path.to_str().ok_or(Error::QueuePath)?)?;
         }

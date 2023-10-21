@@ -6,14 +6,9 @@ use std::{
     path::Path,
 };
 
-use crate::last_fm::{Action, BasicInfo, Client as LastFmClient, Error as LastFmError, SongInfo};
+use log::{error, info, warn};
 
-#[derive(Debug)]
-pub struct WorkQueue {
-    scrobble_queue: VecDeque<(SongInfo, String)>,
-    action_queue: VecDeque<(Action, BasicInfo)>,
-    queue_file: File,
-}
+use crate::last_fm::{Action, BasicInfo, Client as LastFmClient, Error as LastFmError, SongInfo};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -33,11 +28,18 @@ pub enum CreateError {
     Io(#[from] io::Error),
 }
 
+#[derive(Debug)]
+pub struct WorkQueue {
+    scrobble_queue: VecDeque<(SongInfo, String)>,
+    action_queue: VecDeque<(Action, BasicInfo)>,
+    queue_file: File,
+}
+
 impl WorkQueue {
     pub fn new(path: &Path) -> Result<Self, CreateError> {
         let (scrobble_queue, action_queue) = match File::open(path) {
             Ok(f) => bincode::deserialize_from(f).unwrap_or_else(|e| {
-                eprintln!("unable to read queue file: {e}");
+                warn!("unable to read queue file: {e}");
                 (VecDeque::new(), VecDeque::new())
             }),
             Err(_) => (VecDeque::new(), VecDeque::new()),

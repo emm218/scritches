@@ -5,6 +5,7 @@
 use anyhow::anyhow;
 use clap::Parser;
 use last_fm::{Action, BasicInfo, SongInfo};
+use log::{error, info, warn};
 use mpd_client::{
     client::{ConnectWithPasswordError, Connection, ConnectionEvent, Subsystem},
     commands::{CurrentSong, ReadChannelMessages, Stats, Status, SubscribeToChannel},
@@ -80,31 +81,30 @@ impl Connector {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
+    env_logger::init();
+
     let args = Args::parse();
 
     let settings = settings::Settings::new(args)?;
 
     let conn: Connector = if let Some(sock) = settings.mpd_socket {
-        println!("connecting to MPD at {}", sock.display());
+        info!("connecting to MPD at {}", sock.display());
         match UnixStream::connect(&sock).await {
             Ok(sock) => Connector::Uds(sock),
             Err(e) => {
-                println!(
-                    "failed to connect to unix socket `{}`: {e}\ntrying TCP at {}...",
-                    sock.display(),
-                    settings.mpd_addr
-                );
+                warn!("failed to connect to unix socket `{}`: {e}", sock.display(),);
+                info!("connecting to MPD at {}", settings.mpd_addr);
                 Connector::Tcp(TcpStream::connect(&settings.mpd_addr).await?)
             }
         }
     } else {
-        println!("connecting to MPD at {}", settings.mpd_addr);
+        info!("connecting to MPD at {}", settings.mpd_addr);
         Connector::Tcp(TcpStream::connect(&settings.mpd_addr).await?)
     };
 
     let (client, mut state_changes) = conn.connect(settings.mpd_password.as_deref()).await?;
 
-    println!("connected!");
+    info!("connected!");
 
     let (tx, mut rx) = mpsc::channel(5);
 
@@ -209,7 +209,7 @@ async fn handle_player(
                     tx.send(Message::NowPlaying(info)).await?;
                 }
                 match song.try_into() {
-                    Err(e) => eprintln!("can't scrobble song: {e}"),
+                    Err(e) => warn!("couldn't scrobble song: {e}"),
                     Ok(info) => {
                         let timestamp = start_time.as_secs().to_string();
                         tx.send(Message::Scrobble(info, timestamp)).await?;
@@ -229,7 +229,7 @@ async fn handle_player(
         (old, new) => {
             if check_scrobble(start_playtime, cur_playtime, length) && let Some(song) = old {
                     match song.try_into() {
-                        Err(e) => eprintln!("can't scrobble song: {e}"),
+                        Err(e) => warn!("couldn't scrobble song: {e}"),
                         Ok(info) => {
                             let timestamp = start_time.as_secs().to_string();
                             tx.send(Message::Scrobble(info, timestamp)).await?;
@@ -311,19 +311,27 @@ async fn handle_async_msg(
     } else if let Some(msg) = r.await {
         match msg {
             Message::Scrobble(info, timestamp) => {
+                info!("scrobbling {} - {}", info.artist, info.title);
                 if let Err(e) = client.scrobble_one(&info, &timestamp).await {
-                    eprintln!("{e}");
+                    warn!("scrobble failed: {e}");
                     work_queue.add_scrobble(info, timestamp)?;
+                } else {
+                    info!("scrobbled successfully")
                 }
             }
             Message::TrackAction(action, info) => {
+                info!("{}ing {} - {}", action, info.artist, info.title);
                 if let Err(e) = client.do_track_action(action, &info).await {
-                    eprintln!("{e}");
+                    warn!("action failed: {e}");
                     work_queue.add_action(action, info)?;
+                } else {
+                    info!("{}ed successfully", action);
                 }
             }
             Message::NowPlaying(info) => {
-                let _ = client.now_playing(&info).await;
+                if let Ok(()) = client.now_playing(&info).await {
+                    info!("updated now playing status successfully")
+                }
             }
         }
         Ok(Duration::from_secs(15))
