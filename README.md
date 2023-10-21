@@ -41,9 +41,5 @@ restarting a song over and over. I don't know why you'd do that though.
 ## Todo
 
 - persist session key in dbus secrets service if available
-- correctly update "now playing" status when we come back from an outage
-- more graceful shutdown and error handling behavior
-  - program should never panic
-  - not being able to persist queue shouldn't be fatal
-  - distinguish between retryable API errors (service temporarily offline, etc.)
-    and fatal ones (suspended api key lol)
+- fix mysterious sporadic lockups when network dies
+- more graceful shutdown
