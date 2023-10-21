@@ -33,6 +33,10 @@ Current config values:
 any of these config values can also be set using command line options, which
 will override the value read from the config file.
 
+This application uses [env logger](https://crates.io/crates/env_logger) for
+logging, so the log level defaults to `ERROR`, which corresponds to fatal
+problems or those which require user intervention. 
+
 ## Notes
 
 Limitations on how MPD reports events make it non-trivial to tell when a song is
@@ -44,4 +48,3 @@ restarting a song over and over. I don't know why you'd do that though.
 
 - persist session key in dbus secrets service if available
 - fix mysterious sporadic lockups when network dies
-- more graceful shutdown

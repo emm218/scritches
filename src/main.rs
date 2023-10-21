@@ -18,6 +18,7 @@ use tokio::{
     select,
     sync::mpsc,
 };
+use tokio_util::sync::CancellationToken;
 
 use std::{
     cmp::min,
@@ -93,9 +94,16 @@ impl Connector {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> anyhow::Result<()> {
-    env_logger::init();
+async fn main() {
+    env_logger::builder().format_timestamp(None).init();
 
+    if let Err(e) = main_inner().await {
+        error!("{e}");
+        std::process::exit(1);
+    }
+}
+
+async fn main_inner() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let settings = settings::Settings::new(args)?;
@@ -125,13 +133,16 @@ async fn main() -> anyhow::Result<()> {
 
     let max_retry_time = Duration::from_secs(settings.max_retry_time);
 
+    let cancel_token = CancellationToken::new();
+    let cloned_token = cancel_token.clone();
+
     //TODO: more graceful shutdown
     tokio::spawn(async move {
         let mut prev_client = None;
-        let mut r;
+        let mut err;
 
         loop {
-            (prev_client, r) = scrobble_task(
+            (prev_client, err) = scrobble_task(
                 &mut rx,
                 &mut work_queue,
                 prev_client,
@@ -140,12 +151,12 @@ async fn main() -> anyhow::Result<()> {
             )
             .await;
 
-            if let MsgHandleError::LastFmFatal(_) = r {
-                error!("unrecoverable error, shutting down");
-                break;
-            } else if let MsgHandleError::ChannelClosed = r {
-                break;
+            match err {
+                MsgHandleError::ChannelClosed => info!("message channel closed"),
+                MsgHandleError::LastFmFatal(_) => cloned_token.cancel(),
+                MsgHandleError::LastFmReauth(_) => continue,
             }
+            break;
         }
     });
 
@@ -166,7 +177,21 @@ async fn main() -> anyhow::Result<()> {
     }
 
     loop {
-        match state_changes.next().await {
+        select! {
+        _ = cancel_token.cancelled() => return Err(anyhow!("unrecoverable error, shutting down")),
+        s = tokio::signal::ctrl_c() => match s {
+            Ok(_) => {
+                eprintln!();
+                break;
+            }
+            // why would this ever happen?
+            Err(e) => {
+                eprintln!();
+                error!("huh? {e}");
+                break;
+            }
+        },
+        n = state_changes.next() => match n {
             Some(ConnectionEvent::SubsystemChange(Subsystem::Player)) => {
                 (length, start_playtime, start_time, current_song) = handle_player(
                     &client,
@@ -184,10 +209,14 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             Some(ConnectionEvent::SubsystemChange(_)) => continue,
-            _ => break,
-        }
+            _ => {
+                error!("lost connection to MPD");
+                break;
+            }
+        }}
     }
-    Err(anyhow!("Connection closed by server"))
+
+    Ok(())
 }
 
 async fn handle_player(
