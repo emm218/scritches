@@ -21,7 +21,6 @@ use tokio::{
 
 use std::{
     cmp::min,
-    path::Path,
     time::SystemTime,
     time::{Duration, UNIX_EPOCH},
 };
@@ -116,10 +115,10 @@ async fn main() -> anyhow::Result<()> {
     //look into how to check if a future is done and do different actions based on that
     //
     //edit: oh god its the revenge of polling
-    let mut last_fm_client = match retrieve_sk(None) {
-        None => LastFmClient::new().await?,
-        Some(sk) => LastFmClient::with_sk(sk),
-    };
+    //
+    //plan: 2 loops in async task, 1 that selects on this future and receiving a message, breaking
+    //when this future is done, the other that acts as we currently have it
+    let mut last_fm_client = LastFmClient::new(settings.sk_path).await?;
 
     if work_queue.has_work() {
         if let Err(WorkError::BinCode(e)) = work_queue.do_work(&mut last_fm_client).await {
@@ -129,6 +128,7 @@ async fn main() -> anyhow::Result<()> {
 
     let max_retry_time = Duration::from_secs(settings.max_retry_time);
 
+    //TODO: more graceful shutdown
     tokio::spawn(async move {
         let mut retry_time = Duration::from_secs(15);
 
@@ -343,8 +343,4 @@ async fn handle_async_msg(
 #[inline]
 fn check_scrobble(start: Duration, cur: Duration, length: Duration) -> bool {
     (cur - start) >= min(Duration::from_secs(240), length / 2) && length > Duration::from_secs(30)
-}
-
-fn retrieve_sk(path: Option<&Path>) -> Option<String> {
-    None
 }

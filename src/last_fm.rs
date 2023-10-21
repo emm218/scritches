@@ -1,4 +1,8 @@
-use std::{io, time::Duration};
+use std::{
+    fmt, fs, io,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use log::{debug, info, trace, warn};
 use md5::{Digest, Md5};
@@ -195,10 +199,13 @@ pub struct Client {
 }
 
 impl Client {
-    pub async fn new() -> Result<Self, Error> {
+    pub async fn new(sk_path: PathBuf) -> Result<Self, Error> {
         let client = HttpClient::new();
 
-        let session_key = Self::authenticate(&client).await?;
+        let session_key = match Self::retrieve_sk(&sk_path) {
+            Some(sk) => sk,
+            None => Self::authenticate(&client, &sk_path).await?,
+        };
 
         Ok(Self {
             session_key,
@@ -206,16 +213,19 @@ impl Client {
         })
     }
 
-    pub fn with_sk(session_key: String) -> Self {
-        let client = HttpClient::new();
-
-        Self {
-            session_key,
-            client,
+    // TODO: want this to be able to persist session key in dbus secrets service if available
+    // instead of just in a file
+    fn retrieve_sk(path: &Path) -> Option<String> {
+        match std::fs::read_to_string(path) {
+            Err(e) => {
+                warn!("couldn't read session key from `{}`: {e}", path.display());
+                None
+            }
+            Ok(sk) => Some(sk),
         }
     }
 
-    async fn authenticate(client: &HttpClient) -> Result<String, Error> {
+    async fn authenticate(client: &HttpClient, path: &Path) -> Result<String, Error> {
         #[derive(Debug, Deserialize)]
         struct Token {
             token: String,
@@ -270,6 +280,10 @@ impl Client {
             "session key {} authorized for user {}",
             session.key, session.name
         );
+
+        if let Err(e) = fs::write(path, &session.key) {
+            warn!("failed to persist session key: {e}");
+        }
 
         Ok(session.key)
     }
