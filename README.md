@@ -1,7 +1,7 @@
 # Scritches 🐱
 
 I have some problems with existing solutions for scrobbling my music to last.fm
-with [MPD](https://www.musicpd.org/) so I'm trying to roll my own.
+with MPD so I'm trying to roll my own.
 
 ## Features
 
@@ -34,8 +34,9 @@ any of these config values can also be set using command line options, which
 will override the value read from the config file.
 
 This application uses [env logger](https://crates.io/crates/env_logger) for
-logging, so the log level defaults to `ERROR`, which corresponds to fatal
-problems or those which require user intervention. 
+logging, so the log level defaults to `ERROR` (fatal problems or those which
+require user intervention) and this can be changed with the `RUST_LOG`
+environment variable.
 
 ## Notes
 
