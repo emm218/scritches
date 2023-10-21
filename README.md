@@ -25,6 +25,8 @@ Current config values:
 - `mpd_password` the password to connect to MPD with (default none)
 - `queue_path` file to log scrobbles in when offline (default
   `$XDG_STATE_HOME/scritches/queue`)
+- `sk_path` file to persist session key in (default 
+  `$XDG_STATE_HOME/scritches/sk`)
 - `max_retry_time` the maximum time to take between retries in seconds (default
   960/16 mins)
 
