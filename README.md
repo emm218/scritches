@@ -40,7 +40,10 @@ restarting a song over and over. I don't know why you'd do that though.
 
 ## Todo
 
-- persist session key so user doesn't have to reauthenticate every time the
-  scrobbler starts
+- persist session key in dbus secrets service if available
 - allow scrobbles to be added to the queue while the client is authenticating
-- better logging
+- more graceful shutdown and error handling behavior
+  - program should never panic
+  - not being able to persist queue shouldn't be fatal
+  - distinguish between retryable API errors (service temporarily offline, etc.)
+    and fatal ones (suspended api key lol)
