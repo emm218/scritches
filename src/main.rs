@@ -106,6 +106,8 @@ async fn main() {
 async fn main_inner() -> anyhow::Result<()> {
     let args = Args::parse();
 
+    let non_interactive = args.non_interactive;
+
     let settings = settings::Settings::new(args)?;
 
     let conn: Connector = if let Some(sock) = settings.mpd_socket {
@@ -148,6 +150,7 @@ async fn main_inner() -> anyhow::Result<()> {
                 prev_client,
                 &settings.sk_path,
                 max_retry_time,
+                non_interactive,
             )
             .await;
 
@@ -171,6 +174,10 @@ async fn main_inner() -> anyhow::Result<()> {
     let mut current_song = client.command(CurrentSong).await?;
 
     let mut start_time = SystemTime::now().duration_since(UNIX_EPOCH)?;
+
+    if cancel_token.is_cancelled() {
+        return Err(anyhow!("unrecoverable error, shutting down"));
+    }
 
     if let Some(Ok(info)) = current_song.as_ref().map(TryInto::try_into) {
         tx.send(Message::NowPlaying(Some(info))).await?;
@@ -324,8 +331,9 @@ async fn scrobble_task(
     prev_client: Option<LastFmClient>,
     sk_path: &Path,
     max_retry_time: Duration,
+    non_interactive: bool,
 ) -> (Option<LastFmClient>, MsgHandleError) {
-    let client_future = LastFmClient::new(prev_client, sk_path);
+    let client_future = LastFmClient::new(prev_client, sk_path, non_interactive);
 
     tokio::pin!(client_future);
 

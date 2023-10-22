@@ -190,6 +190,9 @@ pub enum Error {
 
     #[error("error deserializing response: {0}")]
     Ser(#[from] serde_json::Error),
+
+    #[error("need interaction for authentication")]
+    NonInteractive,
 }
 
 impl From<ApiError> for Error {
@@ -217,8 +220,15 @@ pub struct Client {
 impl Client {
     // awful awful hack to deal with opaque future types, constructor can take a previous client to
     // reauth it instead of actually creating a new one
-    pub async fn new(prev_client: Option<Self>, sk_path: &Path) -> Result<Self, Error> {
+    pub async fn new(
+        prev_client: Option<Self>,
+        sk_path: &Path,
+        non_interactive: bool,
+    ) -> Result<Self, Error> {
         if let Some(prev_client) = prev_client {
+            if non_interactive {
+                return Err(Error::NonInteractive);
+            }
             return prev_client.re_auth(sk_path).await;
         }
 
@@ -226,7 +236,13 @@ impl Client {
 
         let session_key = match Self::retrieve_sk(sk_path) {
             Some(sk) => sk,
-            None => Self::authenticate(&client, sk_path).await?,
+            None => {
+                if non_interactive {
+                    Err(Error::NonInteractive)
+                } else {
+                    Self::authenticate(&client, sk_path).await
+                }?
+            }
         };
 
         Ok(Self {

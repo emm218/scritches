@@ -34,6 +34,9 @@ pub struct Args {
     /// Maximum time between retries
     #[arg(short, long)]
     time: Option<u64>,
+
+    #[arg(short = 'i', long)]
+    pub non_interactive: bool,
 }
 
 #[derive(Debug, Deserialize)]
