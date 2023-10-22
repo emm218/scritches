@@ -131,7 +131,7 @@ async fn main_inner() -> anyhow::Result<()> {
 
     let (tx, mut rx) = mpsc::channel(5);
 
-    let mut work_queue = WorkQueue::new(settings.queue_path)?;
+    let mut work_queue = WorkQueue::new(settings.queue_path);
 
     let max_retry_time = Duration::from_secs(settings.max_retry_time);
 
