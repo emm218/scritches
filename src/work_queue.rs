@@ -6,7 +6,7 @@ use std::{
     path::Path,
 };
 
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 
 use crate::last_fm::{Action, BasicInfo, Client as LastFmClient, Error as LastFmError, SongInfo};
 
@@ -75,7 +75,9 @@ impl WorkQueue {
                 } else {
                     error!("scrobbling queue failed: {e}");
                 }
-                info!("succesfully scrobbled {count} songs from queue");
+                if count > 0 {
+                    info!("succesfully scrobbled {count} songs from queue");
+                }
                 return Err(e);
             }
             count += range.end;
@@ -95,8 +97,8 @@ impl WorkQueue {
         if let Some(info) = self.last_played.as_ref() {
             client.now_playing(info).await?;
             self.last_played = None;
+            info!("succesfully updated now playing status");
         }
-        info!("succesfully updated now playing status");
 
         Ok(())
     }
