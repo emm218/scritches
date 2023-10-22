@@ -35,6 +35,7 @@ pub struct Args {
     #[arg(short, long)]
     time: Option<u64>,
 
+    /// Exit program if user needs to (re)authorize
     #[arg(short = 'i', long)]
     pub non_interactive: bool,
 }
