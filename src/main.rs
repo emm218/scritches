@@ -441,11 +441,12 @@ async fn handle_async_msg(
             Message::Scrobble(info, timestamp) => {
                 info!("scrobbling {} - {}", info.artist, info.title);
                 if let Err(e) = client.scrobble_one(&info, &timestamp).await {
-                    work_queue.add_scrobble(info, timestamp);
                     if e.is_retryable() {
                         warn!("scrobble failed: {e}");
+                        work_queue.add_scrobble(info, timestamp);
                     } else {
                         error!("scrobble failed: {e}");
+                        work_queue.add_scrobble(info, timestamp);
                         return Err(e.into());
                     }
                 } else {
@@ -455,11 +456,12 @@ async fn handle_async_msg(
             Message::TrackAction(action, info) => {
                 info!("{}ing {} - {}", action, info.artist, info.title);
                 if let Err(e) = client.do_track_action(action, &info).await {
-                    work_queue.add_action(action, info);
                     if e.is_retryable() {
                         warn!("{action}e track failed: {e}");
+                        work_queue.add_action(action, info);
                     } else {
                         error!("{action}e track failed: {e}");
+                        work_queue.add_action(action, info);
                         return Err(e.into());
                     }
                 } else {
