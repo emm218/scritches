@@ -14,7 +14,7 @@ use crate::last_fm::{Action, BasicInfo, Client as LastFmClient, Error as LastFmE
 pub struct WorkQueue {
     scrobble_queue: VecDeque<(SongInfo, String)>,
     action_queue: VecDeque<(Action, BasicInfo)>,
-    queue_file: File,
+    queue_file: Option<File>,
     pub last_played: Option<SongInfo>,
 }
 
@@ -28,7 +28,16 @@ impl WorkQueue {
             Err(_) => (VecDeque::new(), VecDeque::new()),
         };
 
-        let queue_file = File::create(path)?;
+        let queue_file = match File::create(path) {
+            Ok(file) => Some(file),
+            Err(e) => {
+                error!("couldn't open queue file for writing: {e}");
+                error!(
+                    "scritches will continue running but won't be able to write scrobbles to disk"
+                );
+                None
+            }
+        };
 
         let mut res = Self {
             scrobble_queue,
@@ -48,12 +57,14 @@ impl WorkQueue {
     }
 
     fn try_write(&mut self) -> bincode::Result<()> {
-        self.queue_file.set_len(0)?;
-        self.queue_file.rewind()?;
-        bincode::serialize_into(
-            &self.queue_file,
-            &(&self.scrobble_queue, &self.action_queue),
-        )
+        if let Some(file) = self.queue_file.as_mut() {
+            trace!("saving work queue");
+            file.set_len(0)?;
+            file.rewind()?;
+            bincode::serialize_into(file, &(&self.scrobble_queue, &self.action_queue))
+        } else {
+            Ok(())
+        }
     }
 
     #[inline]
