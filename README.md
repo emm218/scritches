@@ -47,5 +47,6 @@ restarting a song over and over. I don't know why you'd do that though.
 
 ## Todo
 
+- sporadically panics due to an overflow on duration subtraction (can't reproduce)
 - persist session key in dbus secrets service if available
 - fix mysterious sporadic lockups when network dies
