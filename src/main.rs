@@ -170,7 +170,12 @@ async fn main_inner() -> anyhow::Result<()> {
 
     let elapsed = status.elapsed.unwrap_or_default();
     let mut length = status.duration.unwrap_or_default();
-    let mut start_playtime = stats.playtime - elapsed;
+    let mut start_playtime = if stats.playtime > elapsed {
+        stats.playtime - elapsed
+    } else {
+        Duration::ZERO
+    };
+
     let mut current_song = client.command(CurrentSong).await?;
 
     let mut start_time = SystemTime::now().duration_since(UNIX_EPOCH)?;
