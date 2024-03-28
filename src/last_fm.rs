@@ -1,9 +1,8 @@
-use std::{fmt, fs, path::Path, time::Duration};
+use std::{fmt, fs, path::Path, sync::LazyLock, time::Duration};
 
 use log::{debug, error, info, trace, warn};
 use md5::{Digest, Md5};
 use mpd_client::responses::{Song, SongInQueue};
-use once_cell::sync::Lazy;
 use reqwest::Client as HttpClient;
 use serde::de::DeserializeOwned;
 use serde_derive::{Deserialize, Serialize};
@@ -16,17 +15,17 @@ static AUTH_URL: &str = "https://www.last.fm/api/auth/";
 
 macro_rules! with_indices {
     ($l:literal) => {
-        Lazy::new(|| array_init::array_init(|i| format!(concat!($l, "[{}]"), i)))
+        std::sync::LazyLock::new(|| array_init::array_init(|i| format!(concat!($l, "[{}]"), i)))
     };
 }
 
 // this is mildly evil but prevents extra memory allocations, yippee!!!
-static TRACK: Lazy<[String; 50]> = with_indices!("track");
-static ARTIST: Lazy<[String; 50]> = with_indices!("artist");
-static ALBUM: Lazy<[String; 50]> = with_indices!("album");
-static ALBUMARTIST: Lazy<[String; 50]> = with_indices!("albumArtist");
-static TIMESTAMP: Lazy<[String; 50]> = with_indices!("timestamp");
-static DURATION: Lazy<[String; 50]> = with_indices!("duration");
+static TRACK: LazyLock<[String; 50]> = with_indices!("track");
+static ARTIST: LazyLock<[String; 50]> = with_indices!("artist");
+static ALBUM: LazyLock<[String; 50]> = with_indices!("album");
+static ALBUMARTIST: LazyLock<[String; 50]> = with_indices!("albumArtist");
+static TIMESTAMP: LazyLock<[String; 50]> = with_indices!("timestamp");
+static DURATION: LazyLock<[String; 50]> = with_indices!("duration");
 
 trait PushParams<'a, T> {
     fn push_params(&mut self, info: &'a T);

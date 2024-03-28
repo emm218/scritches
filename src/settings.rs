@@ -2,7 +2,7 @@ use clap::Parser;
 use config::Config;
 use serde_derive::Deserialize;
 
-use std::{path::PathBuf, result::Result};
+use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(version)]
