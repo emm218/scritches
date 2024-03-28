@@ -13,7 +13,7 @@ use mpd_client::{
     responses::SongInQueue,
     Client as MpdClient,
 };
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use tokio::{
     net::{TcpStream, UnixStream},
     select,

@@ -1,6 +1,6 @@
 use clap::Parser;
 use config::Config;
-use serde_derive::Deserialize;
+use serde::Deserialize;
 
 use std::path::PathBuf;
 

@@ -4,8 +4,7 @@ use log::{debug, error, info, trace, warn};
 use md5::{Digest, Md5};
 use mpd_client::responses::{Song, SongInQueue};
 use reqwest::Client as HttpClient;
-use serde::de::DeserializeOwned;
-use serde_derive::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::time::interval;
 
 static API_KEY: &str = "936df272ba862808520323da81f3fc6e";
