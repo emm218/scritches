@@ -1,8 +1,3 @@
-#![feature(let_chains)]
-#![feature(iter_intersperse)]
-#![feature(duration_constants)]
-#![feature(lazy_cell)]
-
 use anyhow::anyhow;
 use clap::Parser;
 use last_fm::{Action, BasicInfo, SongInfo};
@@ -276,14 +271,14 @@ async fn handle_player(
         }
 
         (old, new) => {
-            if check_scrobble(start_playtime, cur_playtime, length)
-                && let Some(song) = old
-            {
-                match song.try_into() {
-                    Err(e) => warn!("couldn't scrobble song: {e}"),
-                    Ok(info) => {
-                        let timestamp = start_time.as_secs().to_string();
-                        tx.send(Message::Scrobble(info, timestamp)).await?;
+            if check_scrobble(start_playtime, cur_playtime, length) {
+                if let Some(song) = old {
+                    match song.try_into() {
+                        Err(e) => warn!("couldn't scrobble song: {e}"),
+                        Ok(info) => {
+                            let timestamp = start_time.as_secs().to_string();
+                            tx.send(Message::Scrobble(info, timestamp)).await?;
+                        }
                     }
                 }
             }

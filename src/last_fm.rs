@@ -3,7 +3,7 @@ use std::{fmt, fs, path::Path, sync::LazyLock, time::Duration};
 use log::{debug, error, info, trace, warn};
 use md5::{Digest, Md5};
 use mpd_client::responses::{Song, SongInQueue};
-use reqwest::Client as HttpClient;
+use reqwest::{Client as HttpClient, RequestBuilder};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::time::interval;
 
@@ -210,6 +210,66 @@ impl Error {
     }
 }
 
+struct SignedParams<'a, 'b> {
+    params: Vec<(&'a str, &'b str)>,
+    signature: String,
+}
+
+impl<'a, 'b> SignedParams<'a, 'b> {
+    fn into_request(self, client: &HttpClient) -> RequestBuilder {
+        let mut params = self.params;
+        let signature = self.signature;
+
+        params.push(("api_sig", &signature));
+        params.push(("format", "json"));
+
+        client.post(API_URL).form(&params)
+    }
+}
+
+fn sign<'a, 'b>(mut params: Vec<(&'a str, &'b str)>) -> SignedParams<'a, 'b> {
+    params.sort_unstable();
+
+    let mut hasher = Md5::new();
+    for (k, v) in &params[..] {
+        hasher.update(k);
+        hasher.update(v);
+    }
+    hasher.update(API_SECRET);
+
+    let signature = hex::encode(&hasher.finalize()[..]);
+
+    SignedParams { params, signature }
+}
+
+pub async fn unauth_method_call<T>(
+    method: &str,
+    args: Option<Vec<(&str, &str)>>,
+    client: &HttpClient,
+) -> Result<T, Error>
+where
+    T: DeserializeOwned,
+{
+    let mut params = vec![("method", method), ("api_key", API_KEY)];
+
+    if let Some(mut a) = args {
+        params.append(&mut a);
+    }
+
+    let response = sign(params)
+        .into_request(client)
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    if let Ok(e) = serde_json::from_str::<ApiError>(&response) {
+        return Err(e.into());
+    }
+
+    Ok(serde_json::from_str(&response)?)
+}
+
 pub struct Client {
     session_key: String,
     client: HttpClient,
@@ -393,15 +453,12 @@ impl Client {
 
         let client = &self.client;
 
-        let signed = sign(params);
-        let request = client.post(API_URL).form(
-            &signed
-                .params
-                .iter()
-                .chain(vec![("api_sig", &signed.signature[..]), ("format", "json")].iter())
-                .collect::<Vec<_>>(),
-        );
-        let response = request.send().await?.text().await?;
+        let response = sign(params)
+            .into_request(client)
+            .send()
+            .await?
+            .text()
+            .await?;
 
         if let Ok(e) = serde_json::from_str::<ApiError>(&response) {
             return Err(e.into());
@@ -455,55 +512,4 @@ impl Client {
             Action::Unlove => self.void_method("track.unlove", Some(params)).await,
         }
     }
-}
-
-struct SignedParams<'a, 'b> {
-    params: Vec<(&'a str, &'b str)>,
-    signature: String,
-}
-
-fn sign<'a, 'b>(mut params: Vec<(&'a str, &'b str)>) -> SignedParams<'a, 'b> {
-    params.sort_unstable();
-
-    let mut hasher = Md5::new();
-    for (k, v) in &params[..] {
-        hasher.update(k);
-        hasher.update(v);
-    }
-    hasher.update(API_SECRET);
-
-    let signature = hex::encode(&hasher.finalize()[..]);
-
-    SignedParams { params, signature }
-}
-
-pub async fn unauth_method_call<T>(
-    method: &str,
-    args: Option<Vec<(&str, &str)>>,
-    client: &HttpClient,
-) -> Result<T, Error>
-where
-    T: DeserializeOwned,
-{
-    let mut params = vec![("method", method), ("api_key", API_KEY)];
-
-    if let Some(mut a) = args {
-        params.append(&mut a);
-    }
-
-    let signed = sign(params);
-    let request = client.post(API_URL).form(
-        &signed
-            .params
-            .iter()
-            .chain(vec![("api_sig", &signed.signature[..]), ("format", "json")].iter())
-            .collect::<Vec<_>>(),
-    );
-    let response = request.send().await?.text().await?;
-
-    if let Ok(e) = serde_json::from_str::<ApiError>(&response) {
-        return Err(e.into());
-    }
-
-    Ok(serde_json::from_str(&response)?)
 }

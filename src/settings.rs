@@ -9,7 +9,7 @@ use std::path::PathBuf;
 pub struct Args {
     /// Path to config file
     #[arg(short, long)]
-    config: Option<PathBuf>,
+    config: Option<String>,
 
     /// TCP socket address for MPD
     #[arg(short, long)]
@@ -25,11 +25,11 @@ pub struct Args {
 
     /// Queue file for offline use
     #[arg(short, long)]
-    queue: Option<PathBuf>,
+    queue: Option<String>,
 
     /// Session key file
     #[arg(short, long)]
-    key: Option<PathBuf>,
+    key: Option<String>,
 
     /// Maximum time between retries
     #[arg(short, long)]
@@ -66,6 +66,9 @@ pub enum Error {
 
     #[error("Invalid UTF-8 in queue file path")]
     QueuePath,
+
+    #[error("Ivalid UTF-8 in session key file path")]
+    KeyPath,
 }
 
 impl Settings {
@@ -85,7 +88,7 @@ impl Settings {
                 xdg_dirs
                     .place_state_file("sk")?
                     .to_str()
-                    .ok_or(Error::QueuePath)?,
+                    .ok_or(Error::KeyPath)?,
             )?
             .set_default("max_retry_time", 960)?;
 
@@ -102,34 +105,28 @@ impl Settings {
         }
 
         if let Some(queue_path) = args.queue {
-            config_builder = config_builder
-                .set_override("queue_path", queue_path.to_str().ok_or(Error::QueuePath)?)?;
+            config_builder = config_builder.set_override("queue_path", queue_path)?;
         }
 
         if let Some(sk_path) = args.key {
-            config_builder = config_builder
-                .set_override("sk_path", sk_path.to_str().ok_or(Error::QueuePath)?)?;
+            config_builder = config_builder.set_override("sk_path", sk_path)?;
         }
 
         if let Some(time) = args.time {
             config_builder = config_builder.set_override("max_retry_time", time)?;
         }
 
-        if let Some(config_path) = args.config {
-            config_builder = config_builder.add_source(config::File::with_name(
-                config_path.to_str().ok_or(Error::ConfigPath)?,
-            ));
+        config_builder = config_builder.add_source(if let Some(config_path) = args.config {
+            config::File::with_name(&config_path)
         } else {
-            config_builder = config_builder.add_source(
-                config::File::with_name(
-                    xdg::BaseDirectories::with_prefix("scritches")?
-                        .get_config_file("config")
-                        .to_str()
-                        .ok_or(Error::ConfigPath)?,
-                )
-                .required(false),
-            );
-        }
+            config::File::with_name(
+                xdg_dirs
+                    .get_config_file("config")
+                    .to_str()
+                    .ok_or(Error::ConfigPath)?,
+            )
+            .required(false)
+        });
 
         Ok(config_builder.build()?.try_deserialize()?)
     }
